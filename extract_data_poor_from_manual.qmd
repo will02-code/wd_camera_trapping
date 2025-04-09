@@ -1,0 +1,64 @@
+#
+#
+#
+#
+#
+#
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(data.table)
+#
+#
+#
+file_paths <- list.files(
+  path = "D:\\Wild deserts photos\\2024_12_WCAM_originals\\ai_model_spreadsheets\\no_fences_night",
+  pattern = "\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+# Use an anonymous function that adds a column indicating the source file
+combined_df <- map_dfr(file_paths, function(path) {
+  read_csv(path) %>%
+    mutate(source = basename(path)) # Or use the full path
+})
+combined_df$datetime <- strptime(combined_df$time, format = "%Y:%m:%d %H:%M:%S")
+combined_df$time <- format(combined_df$datetime, "%H:%M:%S")
+cleaned <- combined_df %>%
+  mutate(Location = str_extract(label_path, "WCAM\\d{2}"))
+
+
+#
+#
+#
+
+manual <- read_excel("D:\\Wild deserts photos\\2024_12_WCAM_originals\\concatenated_Dave.xlsx")
+glimpse(manual)
+manual <- manual %>%
+  mutate(
+    # make_datetime() builds a proper POSIXct from separate numeric components.
+    datetime = make_datetime(
+      year  = year(Date), # from the Date column
+      month = month(Date),
+      day   = day(Date),
+      hour  = hour(Time), # from the Time column
+      min   = minute(Time),
+      sec   = second(Time)
+    )
+  ) %>%
+  filter(datetime > min(combined_df$datetime)) %>%
+  as.data.table()
+manual$datetime <- ymd_hms(manual$datetime)
+cleaned$datetime <- ymd_hms(cleaned$datetime)
+
+joined <- inner_join(manual, cleaned, by = c("datetime", "Location"))
+joined %>%
+  filter(Species == "Bilby" | Species == "Western Quoll") %>%
+  View()
+#
+#
+#
+#
+#
+#

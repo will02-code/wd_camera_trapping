@@ -1,0 +1,135 @@
+---
+title: "Cumulative Abundance"
+author: "Will Wright"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(data.table)
+```
+
+```{r}
+
+file_paths <- list.files(
+  path = "E:\\Wild deserts photos\\2024_06_WCAM_originals_classified",
+  pattern = "\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+# Use an anonymous function that adds a column indicating the source file
+combined_df <- map_dfr(file_paths, function(path) {
+  read_csv(path) %>%
+    mutate(source = basename(path)) # Or use the full path
+})
+combined_df$datetime <- strptime(combined_df$time, format = "%Y:%m:%d %H:%M:%S")
+combined_df$time <- format(combined_df$datetime, "%H:%M:%S")
+combined_df$date <- format(combined_df$datetime, "%Y-%m-%d")
+cleaned_all <- combined_df %>%
+  mutate(camera = str_extract(label_path, "WCAM\\d{2}")) %>%
+  filter(confidence > 0.85 & confidence != "none")
+```
+
+```{r}
+cleaned_all %>%
+  filter(date == ymd("2024-06-04"), species == "Kangaroo") %>%
+  View()
+
+cameras <- unique(cleaned_all$camera)
+cameras
+finalised_ai <- map(cameras, function(x) {
+  cleaned <- filter(cleaned_all, camera == x)
+  cleaned <- arrange(cleaned, datetime)
+  cleaned$time_block <- NA_integer_
+  group_id <- 1
+  start_time <- cleaned$datetime[1]
+  cleaned$time_block[1] <- group_id
+  for (i in 2:nrow(cleaned)) {
+    # If current datetime is more than 10 minutes after the start_time,
+    # increment the group counter and update the start_time
+    if (difftime(cleaned$datetime[i], start_time, units = "mins") > 10) {
+      group_id <- group_id + 1
+      start_time <- cleaned$datetime[i]
+    }
+
+    # Assign the current group_id
+    cleaned$time_block[i] <- group_id
+  }
+  cleaned %>%
+    group_by(path_original, species) %>%
+    mutate(
+      count = n(),
+      confidence = as.numeric(confidence),
+      confidence = mean(confidence)
+    ) %>%
+    ungroup() %>%
+    group_by(time_block, species) %>%
+    arrange(desc(count), desc(confidence), .by_group = TRUE) %>%
+    summarise(
+      confidence = first(confidence),
+      datetime = first(datetime),
+      path_original = first(path_original),
+      camera = first(camera),
+      datetime = first(datetime),
+      path_annotated = first(path_annotated),
+      ai_count = first(count),
+      obs = "ai"
+    ) %>%
+    as.data.table()
+})
+finalised_ai <- bind_rows(finalised_ai)
+
+finalised_ai <- finalised_ai %>%
+  mutate(date = as.Date(datetime)) %>%
+  group_by(date, species) %>%
+  reframe(count = sum(ai_count), obs = first(obs)) %>%
+  group_by(species) %>%
+  arrange(date) %>%
+  mutate(cumulative = cumsum(count))
+
+
+
+```
+
+
+```{r}
+manual <- read.csv("E:\\Wild deserts photos\\2024_06_WCAM_originals\\concatenated.csv")
+manual <- manual %>%
+  mutate(
+    date = dmy(Date),
+    species = case_when(
+      Species == "Red Kangaroo" ~ "Kangaroo",
+      Species == "Euro" ~ "Kangaroo",
+      Species == "Western Grey Kangaroo" ~ "Kangaroo",
+      Species == "Western Quoll" ~ "Quoll",
+      .default = Species
+    ),
+    obs = "manual"
+  ) %>%
+  group_by(date, species) %>%
+  summarise(count = sum(Number), obs = first(obs)) %>%
+  group_by(species) %>%
+  arrange(date) %>%
+  mutate(cumulative = cumsum(count))
+
+bind_rows(manual, finalised_ai) %>% # arrange(date, species) %>% View()
+  # filter(species =="Kangaroo") %>% View()
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = count, colour = obs)) +
+  facet_wrap(~species) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 22, face = "bold", family = "calibri"),
+    strip.text.x = element_text(size = 25, face = "bold", family = "calibri"),
+    strip.background.x = element_rect(fill = "white"),
+    axis.text.x = element_text(size = 20, colour = "black"),
+    axis.text.y = element_text(size = 20, colour = "black"),
+    axis.title.x = element_text(size = 22, colour = "black"),
+    axis.title.y = element_text(size = 22, colour = "black")
+  )
+
+
+```

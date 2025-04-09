@@ -1,0 +1,183 @@
+---
+title: "2024"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(data.table)
+
+
+
+
+```
+
+```{r}
+
+file_paths <- list.files(
+  path = "E:\\Wild deserts photos\\2024_12_WCAM_originals_classified",
+  pattern = "\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+# Use an anonymous function that adds a column indicating the source file
+combined_df <- map_dfr(file_paths, function(path) {
+  read_csv(path) %>%
+    mutate(source = basename(path)) # Or use the full path
+})
+
+```
+
+```{r}
+
+combined_df$datetime <- strptime(combined_df$time, format = "%Y:%m:%d %H:%M:%S")
+combined_df$time <- format(combined_df$datetime, "%H:%M:%S")
+combined_df$date <- format(combined_df$datetime, "%Y-%m-%d")
+cleaned <- combined_df %>%
+  mutate(camera = str_extract(label_path, "WCAM\\d{2}")) %>%
+  filter(confidence > 0.85 & confidence != "none")
+
+```
+
+```{r}
+# Kind of want to alter this so that the grouping name is the name of the first time. but no matter
+cleaned <- arrange(cleaned, datetime)
+cleaned$time_block <- NA_integer_
+group_id <- 1
+start_time <- cleaned$datetime[1]
+cleaned$time_block[1] <- group_id
+for (i in 2:nrow(cleaned)) {
+  # If current datetime is more than 10 minutes after the start_time,
+  # increment the group counter and update the start_time
+  if (difftime(cleaned$datetime[i], start_time, units = "secs") > 30) {
+    group_id <- group_id + 1
+    start_time <- cleaned$datetime[i]
+  }
+
+  # Assign the current group_id
+  cleaned$time_block[i] <- group_id
+}
+cleaned %>%
+  group_by(path_original, species) %>%
+  mutate(
+    count = n(),
+    confidence = as.numeric(confidence),
+    confidence = mean(confidence)
+  ) %>%
+  ungroup() %>%
+  group_by(time_block, species) %>%
+  arrange(desc(count), desc(confidence), .by_group = TRUE) %>%
+  summarise(
+    confidence = first(confidence),
+    datetime = first(datetime),
+    path_original = first(path_original),
+    camera = first(camera),
+    datetime = first(datetime),
+    path_annotated = first(path_annotated),
+    ai_count = first(count)
+  ) %>%
+  as.data.table() -> finalised_ai
+
+write.csv(finalised_ai, "coding/december_ai_v3.csv")
+
+```
+
+
+```{r}
+
+manual <- read.csv("E:\\Wild deserts photos\\2024_12_WCAM_originals\\concatenated.csv")
+manual_cleaned <- manual %>%
+  mutate(
+    Date = dmy(Date),
+    manual_count = 1
+  ) %>%
+  filter(Date >= dmy("03-12-2024")) %>%
+  as.data.table()
+
+```
+
+```{r}
+
+manual_cleaned <- manual_cleaned %>%
+  mutate(Species = case_when(
+    Species == "Red Kangaroo" ~ "Kangaroo",
+    Species == "Euro" ~ "Kangaroo",
+    .default = Species
+  )) %>%
+  group_by(Species, Date) %>%
+  summarise(count = sum(manual_count)) %>%
+  group_by(Species) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = cumsum(count), method = "manual")
+finalised_ai <- finalised_ai %>%
+  mutate(
+    Date = as.Date(datetime),
+    Species = species
+  ) %>%
+  filter(Date>=dmy("03-12-2024")) %>% 
+  group_by(Species, Date) %>%
+  summarise(count = sum(ai_count)) %>%
+  group_by(Species) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = cumsum(count), method = "ai")
+
+combined <- full_join(manual_cleaned, finalised_ai, by = join_by(Date, Species == Species, method == method, count == count, cumulative_count==cumulative_count))
+
+```
+
+
+
+
+```{r}
+finalised_ai %>%
+  ggplot(aes(x = Date, y = cumulative_count)) +
+  geom_line(aes(colour = Species)) +
+  geom_point(aes(colour = Species)) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 22, face = "bold", family = "calibri"),
+    strip.text.x = element_text(size = 25, face = "bold", family = "calibri"),
+    strip.background.x = element_rect(fill = "white"),
+    axis.text.x = element_text(size = 20, colour = "black"),
+    axis.text.y = element_text(size = 20, colour = "black"),
+    axis.title.x = element_text(size = 22, colour = "black"),
+    axis.title.y = element_text(size = 22, colour = "black")
+  )
+manual_cleaned %>%
+  ggplot(aes(x = Date, y = cumulative_count)) +
+  geom_line(aes(colour = Species)) +
+  geom_point(aes(colour = Species)) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 22, face = "bold", family = "calibri"),
+    strip.text.x = element_text(size = 25, face = "bold", family = "calibri"),
+    strip.background.x = element_rect(fill = "white"),
+    axis.text.x = element_text(size = 20, colour = "black"),
+    axis.text.y = element_text(size = 20, colour = "black"),
+    axis.title.x = element_text(size = 22, colour = "black"),
+    axis.title.y = element_text(size = 22, colour = "black")
+  )
+
+
+combined %>% 
+  ggplot(aes(x = Date)) +
+  geom_line(aes(y = cumulative_count, linetype = method)) +
+  geom_point(aes(y = cumulative_count, shape = method)) +
+
+  facet_wrap(~Species)+
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 22, face = "bold", family = "calibri"),
+    strip.text.x = element_text(size = 25, face = "bold", family = "calibri"),
+    strip.background.x = element_rect(fill = "white"),
+    axis.text.x = element_text(size = 20, colour = "black"),
+    axis.text.y = element_text(size = 20, colour = "black"),
+    axis.title.x = element_text(size = 22, colour = "black"),
+    axis.title.y = element_text(size = 22, colour = "black")
+  )
+
+
+```

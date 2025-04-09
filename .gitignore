@@ -1,0 +1,12 @@
+/december_2024_files
+/runs
+/yolo_labels
+app.R
+confusion_matrix.py
+december_2024.html
+december_ai_no_fences.csv
+december_ai_v2.csv
+december_ai_v3.csv
+december_ai.csv
+environment.yaml
+webapp.py
