@@ -9,19 +9,40 @@ library(lubridate)
 library(readxl)
 library(data.table)
 
-
+my_theme <- function() {
+  theme_bw() +
+    theme(
+      plot.title = element_text(size = 22, face = "bold", family = "calibri"),
+      strip.text.x = element_text(size = 25, face = "bold", family = "calibri"),
+      strip.background.x = element_rect(fill = "white"),
+      axis.text.x = element_text(size = 20, colour = "black"),
+      axis.text.y = element_text(size = 20, colour = "black"),
+      axis.title.x = element_text(size = 22, colour = "black"),
+      axis.title.y = element_text(size = 22, colour = "black"),
+      legend.title = element_text(size = 22, colour = "black"),
+      legend.text = element_text(size = 20, colour = "black"),
+      legend.key.size = unit(2, "cm")
+    )
+}
 
 
 ```
 
 ```{r}
 
-file_paths <- list.files(
-  path = "E:\\Wild deserts photos\\2024_12_WCAM_originals_classified",
+file_paths_night <- list.files(
+  path = "E:\\Wild deserts photos\\2024_04_WCAM_originals_classified\\night_quolls_bilbies_blobs",
   pattern = "\\.csv$",
   recursive = TRUE,
   full.names = TRUE
 )
+file_paths_day <- list.files(
+  path = "E:\\Wild deserts photos\\2024_04_WCAM_originals_classified\\day_v3",
+  pattern = "\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+file_paths <- c(file_paths_night, file_paths_day)
 
 # Use an anonymous function that adds a column indicating the source file
 combined_df <- map_dfr(file_paths, function(path) {
@@ -49,10 +70,59 @@ cleaned$time_block <- NA_integer_
 group_id <- 1
 start_time <- cleaned$datetime[1]
 cleaned$time_block[1] <- group_id
+time_thresholds <- c(
+  "Kangaroo" = 30,
+  "Cat" = 300,
+  "Unidentifiable" = 60,
+  "Rabbit" = 300,
+  "Fox" = 300,
+  "Quoll" = 300,
+  "Bilby" = 300
+)
+cameras <- unique(cleaned$camera)
+for (cam in cameras) {
+  print(cam)
+  temp <- cleaned %>% filter(camera == cam)
+  start_time <- temp$datetime[1]
+  temp$time_block[1] <- group_id
+  for (i in 2:nrow(temp)) {
+    current_species <- temp$species[i]
+    threshold <- time_thresholds[[current_species]]
+
+    if (is.null(threshold)) {
+      threshold <- 60
+      cat(paste("Warning: Species '", current_species, "' not found in time_thresholds. Using default threshold of 60 seconds."))
+    }
+    # If current datetime is more than 10 minutes after the start_time,
+    # increment the group counter and update the start_time
+    if (difftime(temp$datetime[i], start_time, units = "secs") > threshold) {
+      group_id <- group_id + 1
+      start_time <- temp$datetime[i]
+    }
+
+    # Assign the current group_id
+    temp$time_block[i] <- group_id
+  }
+}
+
+column_names <- names(cleaned)
+column_types <- sapply(cleaned, class)
+
+
+# Combine the empty columns into a data frame
+blank_temp <- data.frame(empty_cols)
+cleaned_by_cams <- data.frame()
 for (i in 2:nrow(cleaned)) {
+  current_species <- cleaned$species[i]
+  threshold <- time_thresholds[[current_species]]
+
+  if (is.null(threshold)) {
+    threshold <- 60
+    cat(paste("Warning: Species '", current_species, "' not found in time_thresholds. Using default threshold of 60 seconds."))
+  }
   # If current datetime is more than 10 minutes after the start_time,
   # increment the group counter and update the start_time
-  if (difftime(cleaned$datetime[i], start_time, units = "secs") > 30) {
+  if (difftime(cleaned$datetime[i], start_time, units = "secs") > threshold) {
     group_id <- group_id + 1
     start_time <- cleaned$datetime[i]
   }
@@ -88,13 +158,13 @@ write.csv(finalised_ai, "coding/december_ai_v3.csv")
 
 ```{r}
 
-manual <- read.csv("E:\\Wild deserts photos\\2024_12_WCAM_originals\\concatenated.csv")
+manual <- read.csv("E:\\Wild deserts photos\\2024_04_WCAM_originals\\WTZ_only_Apr01-15_2024_edit.csv")
 manual_cleaned <- manual %>%
   mutate(
     Date = dmy(Date),
     manual_count = 1
   ) %>%
-  filter(Date >= dmy("03-12-2024")) %>%
+  # filter(Date >= dmy("03-12-2024")) %>%
   as.data.table()
 
 ```
@@ -117,14 +187,14 @@ finalised_ai <- finalised_ai %>%
     Date = as.Date(datetime),
     Species = species
   ) %>%
-  filter(Date>=dmy("03-12-2024")) %>% 
+  filter(Date <= dmy("15-04-2024") & Date >= dmy("01-04-2024")) %>%
   group_by(Species, Date) %>%
   summarise(count = sum(ai_count)) %>%
   group_by(Species) %>%
   arrange(Date) %>%
   mutate(cumulative_count = cumsum(count), method = "ai")
 
-combined <- full_join(manual_cleaned, finalised_ai, by = join_by(Date, Species == Species, method == method, count == count, cumulative_count==cumulative_count))
+combined <- full_join(manual_cleaned, finalised_ai, by = join_by(Date, Species == Species, method == method, count == count, cumulative_count == cumulative_count))
 
 ```
 
@@ -162,22 +232,12 @@ manual_cleaned %>%
   )
 
 
-combined %>% 
+combined %>%
   ggplot(aes(x = Date)) +
-  geom_line(aes(y = cumulative_count, linetype = method)) +
-  geom_point(aes(y = cumulative_count, shape = method)) +
-
-  facet_wrap(~Species)+
-  theme_bw() +
-  theme(
-    plot.title = element_text(size = 22, face = "bold", family = "calibri"),
-    strip.text.x = element_text(size = 25, face = "bold", family = "calibri"),
-    strip.background.x = element_rect(fill = "white"),
-    axis.text.x = element_text(size = 20, colour = "black"),
-    axis.text.y = element_text(size = 20, colour = "black"),
-    axis.title.x = element_text(size = 22, colour = "black"),
-    axis.title.y = element_text(size = 22, colour = "black")
-  )
+  geom_line(aes(y = count, linetype = method)) +
+  geom_point(aes(y = count, shape = method), size = 4) +
+  facet_wrap(~Species, scales = "free_y") +
+  my_theme()
 
 
 ```
