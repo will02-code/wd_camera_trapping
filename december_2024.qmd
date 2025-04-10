@@ -49,17 +49,17 @@ combined_df <- map_dfr(file_paths, function(path) {
   read_csv(path) %>%
     mutate(source = basename(path)) # Or use the full path
 })
-
-```
-
-```{r}
-
 combined_df$datetime <- strptime(combined_df$time, format = "%Y:%m:%d %H:%M:%S")
 combined_df$time <- format(combined_df$datetime, "%H:%M:%S")
 combined_df$date <- format(combined_df$datetime, "%Y-%m-%d")
+```
+
+```{r}
 cleaned <- combined_df %>%
   mutate(camera = str_extract(label_path, "WCAM\\d{2}")) %>%
   filter(confidence > 0.85 & confidence != "none")
+
+
 
 ```
 
@@ -80,9 +80,27 @@ time_thresholds <- c(
   "Bilby" = 300
 )
 cameras <- unique(cleaned$camera)
+cleaned_by_camera <- data.frame(
+  path_original = character(),
+  species = character(),
+  confidence = character(),
+  bbox = character(),
+  path_annotated = character(),
+  label_path = character(),
+  time = character(),
+  source = character(),
+  datetime = as.Date(character()),
+  date = character(),
+  camera = character(),
+  time_block = double()
+)
+
 for (cam in cameras) {
   print(cam)
-  temp <- cleaned %>% filter(camera == cam)
+  temp <- cleaned %>%
+    arrange(camera) %>%
+    filter(camera == cam) %>%
+    arrange(datetime)
   start_time <- temp$datetime[1]
   temp$time_block[1] <- group_id
   for (i in 2:nrow(temp)) {
@@ -103,15 +121,11 @@ for (cam in cameras) {
     # Assign the current group_id
     temp$time_block[i] <- group_id
   }
+  cleaned_by_camera <- bind_rows(cleaned_by_camera, temp)
 }
 
-column_names <- names(cleaned)
-column_types <- sapply(cleaned, class)
-
-
 # Combine the empty columns into a data frame
-blank_temp <- data.frame(empty_cols)
-cleaned_by_cams <- data.frame()
+
 for (i in 2:nrow(cleaned)) {
   current_species <- cleaned$species[i]
   threshold <- time_thresholds[[current_species]]
@@ -130,7 +144,7 @@ for (i in 2:nrow(cleaned)) {
   # Assign the current group_id
   cleaned$time_block[i] <- group_id
 }
-cleaned %>%
+cleaned_by_camera %>%
   group_by(path_original, species) %>%
   mutate(
     count = n(),
@@ -238,6 +252,421 @@ combined %>%
   geom_point(aes(y = count, shape = method), size = 4) +
   facet_wrap(~Species, scales = "free_y") +
   my_theme()
+
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+time_thresholds <- c(
+  "Kangaroo" = 30,
+  "Cat" = 300,
+  "Unidentifiable" = 60,
+  "Rabbit" = 300,
+  "Fox" = 300,
+  "Quoll" = 300,
+  "Bilby" = 300
+) # Can be different per species
+
+
+confidence_threshold <- 0.85 # Can be difference per species and per model (night_quolls_bilbies_blobs and day_v3)
+
+
+file_paths_night <- list.files(
+  path = "E:\\Wild deserts photos\\2024_04_WCAM_originals_classified\\night_quolls_bilbies_blobs",
+  pattern = "\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+file_paths_day <- list.files(
+  path = "E:\\Wild deserts photos\\2024_04_WCAM_originals_classified\\day_v3",
+  pattern = "\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+file_paths <- c(file_paths_night, file_paths_day)
+
+# Use an anonymous function that adds a column indicating the source file
+combined_df <- map_dfr(file_paths, function(path) {
+  read_csv(path) %>%
+    mutate(source = basename(path)) # Or use the full path
+})
+combined_df$datetime <- strptime(combined_df$time, format = "%Y:%m:%d %H:%M:%S")
+combined_df$time <- format(combined_df$datetime, "%H:%M:%S")
+combined_df$date <- format(combined_df$datetime, "%Y-%m-%d")
+
+
+
+cleaned <- combined_df %>%
+  mutate(camera = str_extract(label_path, "WCAM\\d{2}")) %>%
+  filter(confidence > confidence_threshold & confidence != "none")
+
+cameras <- unique(cleaned$camera)
+cleaned_by_camera <- data.frame(
+  path_original = character(),
+  species = character(),
+  confidence = character(),
+  bbox = character(),
+  path_annotated = character(),
+  label_path = character(),
+  time = character(),
+  source = character(),
+  datetime = as.Date(character()),
+  date = character(),
+  camera = character(),
+  time_block = double()
+)
+
+for (cam in cameras) {
+  print(cam)
+  temp <- cleaned %>%
+    arrange(camera) %>%
+    filter(camera == cam) %>%
+    arrange(datetime)
+  start_time <- temp$datetime[1]
+  temp$time_block[1] <- group_id
+  for (i in 2:nrow(temp)) {
+    current_species <- temp$species[i]
+    threshold <- time_thresholds[[current_species]]
+
+    if (is.null(threshold)) {
+      threshold <- 60
+      cat(paste("Warning: Species '", current_species, "' not found in time_thresholds. Using default threshold of 60 seconds."))
+    }
+    # If current datetime is more than 10 minutes after the start_time,
+    # increment the group counter and update the start_time
+    if (difftime(temp$datetime[i], start_time, units = "secs") > threshold) {
+      group_id <- group_id + 1
+      start_time <- temp$datetime[i]
+    }
+
+    # Assign the current group_id
+    temp$time_block[i] <- group_id
+  }
+  cleaned_by_camera <- bind_rows(cleaned_by_camera, temp)
+}
+cleaned_by_camera %>%
+  group_by(path_original, species) %>%
+  mutate(
+    count = n(),
+    confidence = as.numeric(confidence),
+    confidence = mean(confidence)
+  ) %>%
+  ungroup() %>%
+  group_by(time_block, species) %>%
+  arrange(desc(count), desc(confidence), .by_group = TRUE) %>%
+  summarise(
+    confidence = first(confidence),
+    datetime = first(datetime),
+    path_original = first(path_original),
+    camera = first(camera),
+    datetime = first(datetime),
+    path_annotated = first(path_annotated),
+    ai_count = first(count)
+  ) %>%
+  as.data.table() %>%
+  mutate(
+    Date = as.Date(datetime),
+    Species = species
+  ) %>%
+  filter(Date <= dmy("15-04-2024") & Date >= dmy("01-04-2024")) %>%
+  group_by(Species, Date) %>%
+  summarise(count = sum(ai_count)) %>%
+  group_by(Species) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = cumsum(count), method = "ai") -> finalised_ai
+
+manual <- read.csv("E:\\Wild deserts photos\\2024_04_WCAM_originals\\WTZ_only_Apr01-15_2024_edit.csv")
+manual_cleaned <- manual %>%
+  mutate(
+    Date = dmy(Date),
+    manual_count = 1
+  ) %>%
+  # filter(Date >= dmy("03-12-2024")) %>%
+  as.data.table() %>%
+  mutate(Species = case_when(
+    Species == "Red Kangaroo" ~ "Kangaroo",
+    Species == "Euro" ~ "Kangaroo",
+    .default = Species
+  )) %>%
+  group_by(Species, Date) %>%
+  summarise(count = sum(manual_count)) %>%
+  group_by(Species) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = cumsum(count), method = "manual")
+
+
+```
+
+
+```{r}
+# Define all your species
+all_species <- c("Kangaroo", "Cat", "Unidentifiable", "Rabbit", "Fox", "Quoll", "Bilby") # Add any others
+
+# Function to calculate the total absolute error for given parameters
+evaluate_parameters <- function(params) {
+  # params should be a list or vector containing all thresholds
+  # Example structure: params$conf_Kangaroo_day, params$conf_Kangaroo_night, params$time_Kangaroo, etc.
+
+  # --- 1. Extract parameters ---
+  # It's often easier to pass parameters as a named list or vector
+  # Example: Assuming params is a named list like:
+  # list(conf_day_Kangaroo=0.8, conf_night_Kangaroo=0.75, time_Kangaroo=30, ...)
+
+  # Dynamically create time_thresholds vector
+  time_thresholds <- numeric(length(all_species))
+  names(time_thresholds) <- all_species
+  for (sp in all_species) {
+    time_thresholds[[sp]] <- params[[paste0("time_", sp)]]
+  }
+
+  # Confidence thresholds will be used inside the filtering step
+  # We need separate thresholds for day and night models, per species
+
+  # --- 2. Read and Process AI Data (Your existing code, adapted) ---
+  file_paths_night <- list.files(
+    path = "E:\\Wild deserts photos\\2024_04_WCAM_originals_classified\\night_quolls_bilbies_blobs",
+    pattern = "\\.csv$",
+    recursive = TRUE,
+    full.names = TRUE
+  )
+  file_paths_day <- list.files(
+    path = "E:\\Wild deserts photos\\2024_04_WCAM_originals_classified\\day_v3",
+    pattern = "\\.csv$",
+    recursive = TRUE,
+    full.names = TRUE
+  )
+  file_paths <- c(file_paths_night, file_paths_day)
+
+  combined_df <- map_dfr(file_paths, function(path) {
+    model_type <- ifelse(grepl("night_", path, fixed = TRUE), "night", "day") # Determine model type
+    read_csv(path) %>%
+      mutate(source = basename(path), model_type = model_type) # Add model type
+  })
+  combined_df$datetime <- strptime(combined_df$time, format = "%Y:%m:%d %H:%M:%S")
+  combined_df$time <- format(combined_df$datetime, "%H:%M:%S")
+  combined_df$date <- format(combined_df$datetime, "%Y-%m-%d")
+
+  # *** Modification: Apply species- and model-specific confidence thresholds ***
+  cleaned <- combined_df %>%
+    mutate(camera = str_extract(label_path, "WCAM\\d{2}")) %>%
+    filter(confidence != "none") %>% # Keep numeric confidences first
+    mutate(confidence = as.numeric(confidence)) %>%
+    # Apply dynamic filtering
+    filter(
+      (model_type == "day" & confidence > params[[paste0("conf_day_", species)]]) |
+        (model_type == "night" & confidence > params[[paste0("conf_night_", species)]])
+    )
+
+  # --- 3. Apply Time Buffering (Your existing code) ---
+  cameras <- unique(cleaned$camera)
+  cleaned_by_camera <- list() # Use a list for efficiency
+  group_id_counter <- 1 # Use a counter instead of global variable
+
+  for (cam in cameras) {
+    # print(cam) # Optional: remove for speed during optimization
+    temp <- cleaned %>%
+      filter(camera == cam) %>%
+      arrange(datetime)
+
+    if (nrow(temp) == 0) next # Skip if no data for this camera after filtering
+
+    temp$time_block <- NA # Initialize column
+    start_time <- temp$datetime[1]
+    current_group_id <- group_id_counter
+    temp$time_block[1] <- current_group_id
+
+    if (nrow(temp) > 1) {
+      for (i in 2:nrow(temp)) {
+        current_species <- temp$species[i]
+        # Lookup threshold for the current species
+        threshold <- time_thresholds[[current_species]]
+        # Use a default if species not found (shouldn't happen if all_species is correct)
+        if (is.null(threshold)) {
+          threshold <- 60
+        }
+
+        # Check time difference *within the same species* (common approach)
+        # Find the last detection of the *same species* in this camera's temp df
+        last_same_species_time <- tail(temp$datetime[1:(i - 1)][temp$species[1:(i - 1)] == current_species], 1)
+
+        # If there was no previous detection of this species OR
+        # if the time diff from the *last detection of the same species* exceeds threshold
+        if (length(last_same_species_time) == 0 || difftime(temp$datetime[i], last_same_species_time, units = "secs") > threshold) {
+          group_id_counter <- group_id_counter + 1
+          current_group_id <- group_id_counter
+          # start_time <- temp$datetime[i] # Reset start_time? Or just increment group ID?
+          # Your original code resets based on *any* previous detection's start_time
+          # A common alternative is to check against the *last detection of the same species*
+        }
+        temp$time_block[i] <- current_group_id # Assign the potentially updated group ID
+      }
+    }
+    cleaned_by_camera[[cam]] <- temp
+    group_id_counter <- group_id_counter + 1 # Ensure next camera starts fresh group IDs
+  }
+  cleaned_by_camera_df <- bind_rows(cleaned_by_camera)
+
+
+  # --- 4. Summarise AI Counts (Your existing code) ---
+  if (nrow(cleaned_by_camera_df) == 0) {
+    # Handle case where filtering removed all data
+    finalised_ai <- data.frame(Species = character(), Date = as.Date(character()), count = integer(), method = character(), cumulative_count = integer())
+  } else {
+    finalised_ai <- cleaned_by_camera_df %>%
+      group_by(path_original, species) %>% # Should maybe group by time_block instead? Check logic
+      # Your original grouping logic might need adjustment depending on how time_block is assigned
+      # Let's assume your original aggregation logic after time_block assignment is correct:
+      group_by(time_block, species) %>%
+      arrange(desc(confidence), .by_group = TRUE) %>% # Select highest confidence detection per block
+      slice(1) %>% # Keep only the first row (highest confidence) per time_block/species
+      ungroup() %>%
+      mutate(
+        Date = as.Date(datetime),
+        Species = species,
+        ai_count = 1 # Each remaining row is one independent detection event
+      ) %>%
+      # Filter date range *before* summarising
+      filter(Date <= dmy("15-04-2024") & Date >= dmy("01-04-2024")) %>% # Use your specific date range
+      group_by(Species, Date) %>%
+      summarise(count = n(), .groups = "drop") %>% # Count events per species per day
+      # Ensure all species/dates are present for cumsum
+      ungroup() %>%
+      tidyr::complete(Species = all_species, Date = seq(dmy("01-04-2024"), dmy("15-04-2024"), by = "day"), fill = list(count = 0)) %>%
+      filter(Species %in% all_species) %>% # Keep only relevant species
+      group_by(Species) %>%
+      arrange(Date) %>%
+      mutate(cumulative_count = cumsum(count), method = "ai")
+  }
+
+
+  # --- 5. Load and Process Manual Data (Your existing code) ---
+  manual <- read.csv("E:\\Wild deserts photos\\2024_04_WCAM_originals\\WTZ_only_Apr01-15_2024_edit.csv")
+  manual_cleaned <- manual %>%
+    mutate(
+      Date = dmy(Date),
+      manual_count = 1
+    ) %>%
+    as.data.table() %>%
+    mutate(Species = case_when(
+      Species == "Red Kangaroo" ~ "Kangaroo",
+      Species == "Euro" ~ "Kangaroo",
+      .default = Species
+    )) %>%
+    # Filter date range to match AI
+    filter(Date <= dmy("15-04-2024") & Date >= dmy("01-04-2024")) %>%
+    # Ensure we only consider species the AI can detect
+    filter(Species %in% all_species) %>%
+    group_by(Species, Date) %>%
+    summarise(count = sum(manual_count), .groups = "drop") %>%
+    # Ensure all species/dates are present
+    ungroup() %>%
+    tidyr::complete(Species = all_species, Date = seq(dmy("01-04-2024"), dmy("15-04-2024"), by = "day"), fill = list(count = 0)) %>%
+    filter(Species %in% all_species) %>%
+    group_by(Species) %>%
+    arrange(Date) %>%
+    mutate(cumulative_count = cumsum(count), method = "manual")
+
+
+  # --- 6. Compare and Calculate Metric ---
+  ai_counts <- finalised_ai %>%
+    select(Species, Date, ai_count = count)
+
+  manual_counts <- manual_cleaned %>%
+    select(Species, Date, manual_count = count)
+
+  comparison_df <- full_join(ai_counts, manual_counts, by = c("Species", "Date")) %>%
+    mutate(
+      ai_count = ifelse(is.na(ai_count), 0, ai_count),
+      manual_count = ifelse(is.na(manual_count), 0, manual_count)
+    )
+
+  # Calculate the chosen metric (e.g., total absolute error)
+  total_absolute_error <- sum(abs(comparison_df$ai_count - comparison_df$manual_count))
+
+  # Return the score (lower is better for error metrics)
+  return(total_absolute_error)
+}
+
+
+
+
+```
+
+
+
+```{r}
+# --- Define Species and Parameter Names ---
+all_species <- c("Kangaroo", "Cat", "Unidentifiable", "Rabbit", "Fox", "Quoll", "Bilby")
+param_names <- c(
+  paste0("conf_day_", all_species),
+  paste0("conf_night_", all_species),
+  paste0("time_", all_species)
+)
+
+
+param_ranges <- list(
+  # Confidence: Generally > 0.5, maybe < 0.99
+  conf_day_min = 0.8, conf_day_max = 0.95,
+  conf_night_min = 0.8, conf_night_max = 0.95, # Night might need lower threshold?
+  # Time buffer: e.g., 15 seconds to 10 minutes (600 seconds)
+  time_min = 15, time_max = 600
+)
+
+# --- Randomized Search Loop ---
+n_iterations <- 200 # Number of random parameter sets to try
+results_list <- list()
+
+for (i in 1:n_iterations) {
+  print(paste("Iteration:", i, "/", n_iterations))
+
+  # Sample random parameters
+  current_params <- list()
+  for (sp in all_species) {
+    current_params[[paste0("conf_day_", sp)]] <- runif(1, param_ranges$conf_day_min, param_ranges$conf_day_max)
+    current_params[[paste0("conf_night_", sp)]] <- runif(1, param_ranges$conf_night_min, param_ranges$conf_night_max)
+    # Time threshold - often better to sample on log scale or use integers
+    current_params[[paste0("time_", sp)]] <- round(runif(1, param_ranges$time_min, param_ranges$time_max))
+  }
+
+  # Evaluate this parameter set
+  # Use tryCatch to handle potential errors during evaluation
+  score <- evaluate_parameters(current_params)
+
+
+
+  # Store results
+  results_list[[i]] <- list(params = current_params, score = score)
+
+  # Optional: Print progress
+  cat("Score:", score, "\n")
+}
+
+# --- Find the Best Parameters ---
+best_result <- results_list[[which.min(map_dbl(results_list, "score"))]]
+
+print("Best Score Found:")
+print(best_result$score)
+
+print("Best Parameters Found:")
+# Print neatly
+best_params_df <- data.frame(
+  parameter = names(best_result$params),
+  value = unlist(best_result$params)
+)
+print(best_params_df)
+
+# You can now use best_result$params as your optimized thresholds
+optimised_time_thresholds <- best_params_df[grepl("time_", best_params_df$parameter), ]
+optimised_conf_thresholds <- best_params_df[grepl("conf_", best_params_df$parameter), ]
 
 
 ```
