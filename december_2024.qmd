@@ -248,10 +248,13 @@ manual_cleaned %>%
 
 combined %>%
   ggplot(aes(x = Date)) +
-  geom_line(aes(y = count, linetype = method)) +
-  geom_point(aes(y = count, shape = method), size = 4) +
+  geom_line(aes(y = cumulative_count, linetype = method)) +
+  geom_point(aes(y = cumulative_count, shape = method), size = 4) +
+  
   facet_wrap(~Species, scales = "free_y") +
-  my_theme()
+  my_theme()+
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5)
+  )
 
 
 ```
@@ -398,7 +401,7 @@ manual_cleaned <- manual %>%
     .default = Species
   )) %>%
   group_by(Species, Date) %>%
-  summarise(count = sum(manual_count)) %>%
+  summarise(count = cumsum(manual_count)) %>%
   group_by(Species) %>%
   arrange(Date) %>%
   mutate(cumulative_count = cumsum(count), method = "manual")
