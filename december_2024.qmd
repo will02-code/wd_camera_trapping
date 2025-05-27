@@ -277,10 +277,11 @@ time_thresholds <- c(
   "Fox" = 300,
   "Quoll" = 300,
   "Bilby" = 300
-) # Can be different per species
+) # Can be different per species or the same, see comments
 
 
-confidence_threshold <- 0.85 # Can be difference per species and per model (night_quolls_bilbies_blobs and day_v3)
+
+confidence_threshold <- 0.85 # Can be different per species and per model (night_quolls_bilbies_blobs and day_v3) #Not relevant for you probably
 
 
 file_paths_night <- list.files(

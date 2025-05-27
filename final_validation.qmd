@@ -1,0 +1,187 @@
+---
+title: "My Quarto Notebook"
+format: html
+---
+
+# Packages
+
+```{r}
+library(exiftoolr)
+library(tidyverse)
+library(tidymodels)
+library(furrr)
+library(tictoc)
+# install exiftool
+# install_exiftool()
+exifr::configure_exiftool()
+my_theme <- function() {
+  theme_bw() +
+    theme(
+      plot.title = element_text(size = 22, face = "bold", family = "calibri"),
+      strip.text.x = element_text(size = 25, face = "bold", family = "calibri"),
+      strip.background.x = element_rect(fill = "white"),
+      axis.text.x = element_text(size = 20, colour = "black"),
+      axis.text.y = element_text(size = 20, colour = "black"),
+      axis.title.x = element_text(size = 22, colour = "black"),
+      axis.title.y = element_text(size = 22, colour = "black"),
+      legend.title = element_text(size = 22, colour = "black"),
+      legend.text = element_text(size = 20, colour = "black"),
+    )
+}
+```
+
+# Testing
+
+```{r}
+
+correct_incorrect = str_extract(exif$Categories, "correct|incorrect")
+if (correct_incorrect == "incorrect"){
+    correct_species = str_extract(exif$Categories, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit")
+}else{
+    correct_species = str_extract(image_path, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit")
+}
+
+
+
+```
+
+# Final
+
+```{r}
+
+
+folders = c(
+  "E:/Wild deserts photos/2024_04_WCAM_originals/training/night",
+  "E:/Wild deserts photos/2024_04_WCAM_originals/training/day",
+  "E:/Wild deserts photos/2024_06_WCAM_originals/training/night",
+  "E:/Wild deserts photos/2024_06_WCAM_originals/training/day",
+  "E:/Wild deserts photos/2024_11_WCAM_originals/training/night",
+  "E:/Wild deserts photos/2024_11_WCAM_originals/training/day",
+  "E:/Wild deserts photos/2024_12_WCAM_originals/training/night",
+  "E:/Wild deserts photos/2024_12_WCAM_originals/training/day",
+  "E:/Wild deserts photos/2025_01_PCAM_originals/training/night",
+  "E:/Wild deserts photos/2025_01_PCAM_originals/training/day",
+  "E:/Wild deserts photos/2025_03_WCAM_originals/training/night",
+  "E:/Wild deserts photos/2025_03_WCAM_originals/training/day"
+
+)
+
+images = list.files(folders, full.names =TRUE, recursive = TRUE)
+# Very slow initial method
+# process_image <- function(image_path) {
+#   tryCatch({
+#     print(image_path)
+#     exif <- exif_read(image_path) %>% select(Categories)
+#     categories <- exif$Categories %>% str_remove_all("Categor")
+#     correct_incorrect <- str_extract(categories, "correct|incorrect")
+#     predicted_species <- str_extract(image_path, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit")
+#     if (correct_incorrect == "incorrect") {
+#       correct_species <- str_extract(categories, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit")
+#     } else { # if correct
+#       correct_species <- predicted_species
+#     }
+#     tibble(
+#       image_path = image_path,
+#       predicted_species = predicted_species,
+#       correct_species = correct_species,
+#       error = NA_character_
+#     )
+#   }, error = function(e) {
+#     tibble(
+#       image_path = image_path,
+#       predicted_species = NA_character_,
+#       correct_species = NA_character_,
+#       error = as.character(e)
+#     )
+#   })
+# }
+
+tic() #exiftoolr with only categories is very fast (~ 1 sec per 100 images)
+data_list <- exiftoolr::exif_read(images, tags = c("Categories"))
+toc()
+
+tic() # 4 sec per 100 images
+data_list3 <- exifr::read_exif(images,tags = c("Categories"))
+toc()
+
+tic() #not even worth mentioning. do not use this
+# data_list2 <- map(images, process_image)
+toc()
+
+final_df <- data_list %>%  #need to sort out the non_targets here somehow
+  mutate(
+    Categories = str_remove_all(Categories, "Categor"),
+    correct_incorrect = str_extract(Categories, "correct|incorrect"),
+    predicted_species = str_extract(SourceFile, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"),
+    correct_species = if_else(correct_incorrect == "incorrect", str_extract(Categories, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"), predicted_species),
+    correct_species = as.factor(correct_species), 
+    predicted_species = as.factor(predicted_species),
+    confidence = if_else(str_detect(SourceFile, "low_confidence"), "low_confidence", "high_confidence"),
+    camera = str_extract(SourceFile, "[WP]CAM\\d{2}"),
+    datetime = str_extract(SourceFile, "\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}_\\d{2}") %>% ymd_hms(tz = "Australia/Sydney")
+    
+  
+  ) %>% View()
+
+
+saveRDS(data_list, "temp.rds")
+final_df <- bind_rows(data_list) %>% 
+  filter(correct_species != "non_target") %>% #need to deal with these somehow
+  mutate(
+    correct_species = as.factor(correct_species), 
+    predicted_species = as.factor(predicted_species),
+    confidence = if_else(str_detect(image_path, "low_confidence"), "low_confidence", "high_confidence"),
+    camera = str_extract(image_path, "[WP]CAM\\d{2}"),
+    datetime = str_extract(image_path, "\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}_\\d{2}") %>% ymd_hms(tz = "Australia/Sydney")
+    )
+final_df %>% 
+  write.csv("initial_validation.csv")
+
+test
+# Create the confusion matrix
+cm <- conf_mat(final_df %>% filter(confidence == "high_confidence"), truth = correct_species, estimate = predicted_species)
+autoplot(cm, type = "heatmap")+my_theme()
+
+final_df %>% filter(confidence == "high_confidence"& correct_species != "non_target") %>% View()
+
+
+summary(cm)
+
+
+final_df %>% filter(correct_species == "non_target") %>% View()
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+data("hpc_cv")
+cm <- hpc_cv %>%
+  filter(Resample == "Fold01") %>%
+  conf_mat(obs, pred)
+cm
+cells_per_resample <- hpc_cv %>%
+  group_by(Resample) %>%
+  conf_mat(obs, pred) %>%
+  mutate(tidied = lapply(conf_mat, tidy)) %>%
+  unnest(tidied)
+counts_per_resample <- hpc_cv %>%
+  group_by(Resample) %>%
+  summarize(total = n()) %>%
+  left_join(cells_per_resample, by = "Resample") %>%
+  # Compute the proportions
+  mutate(prop = value / total) %>%
+  group_by(name) %>%
+  # Average
+  summarize(prop = mean(prop))
+
+
+
+```
+
