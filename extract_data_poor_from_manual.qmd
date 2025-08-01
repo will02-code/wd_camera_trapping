@@ -1,16 +1,25 @@
-#
-#
-#
-#
-#
-#
+---
+title: "Extract Data from Manual Validation"
+format: html
+---
+
+## Setup
+
+```{r}
+#| label: setup
+#| message: false
+
 library(tidyverse)
 library(lubridate)
 library(readxl)
 library(data.table)
-#
-#
-#
+```
+
+## Load and Process AI Model Results
+
+```{r}
+#| label: load-ai-data
+
 file_paths <- list.files(
   path = "D:\\Wild deserts photos\\2024_12_WCAM_originals\\ai_model_spreadsheets\\no_fences_night",
   pattern = "\\.csv$",
@@ -23,42 +32,54 @@ combined_df <- map_dfr(file_paths, function(path) {
   read_csv(path) %>%
     mutate(source = basename(path)) # Or use the full path
 })
+
+# Process datetime information
 combined_df$datetime <- strptime(combined_df$time, format = "%Y:%m:%d %H:%M:%S")
 combined_df$time <- format(combined_df$datetime, "%H:%M:%S")
+
 cleaned <- combined_df %>%
   mutate(Location = str_extract(label_path, "WCAM\\d{2}"))
+```
 
+## Load and Process Manual Data
 
-#
-#
-#
+```{r}
+#| label: load-manual-data
 
-manual <- read_excel("D:\\Wild deserts photos\\2024_12_WCAM_originals\\concatenated_Dave.xlsx")
+manual <- read_excel(
+  "D:\\Wild deserts photos\\2024_12_WCAM_originals\\concatenated_Dave.xlsx"
+)
 glimpse(manual)
+
 manual <- manual %>%
   mutate(
     # make_datetime() builds a proper POSIXct from separate numeric components.
     datetime = make_datetime(
-      year  = year(Date), # from the Date column
+      year = year(Date), # from the Date column
       month = month(Date),
-      day   = day(Date),
-      hour  = hour(Time), # from the Time column
-      min   = minute(Time),
-      sec   = second(Time)
+      day = day(Date),
+      hour = hour(Time), # from the Time column
+      min = minute(Time),
+      sec = second(Time)
     )
   ) %>%
   filter(datetime > min(combined_df$datetime)) %>%
   as.data.table()
+
+# Convert datetime columns to consistent format
 manual$datetime <- ymd_hms(manual$datetime)
 cleaned$datetime <- ymd_hms(cleaned$datetime)
+```
+
+## Join and Filter Data
+
+```{r}
+#| label: join-data
 
 joined <- inner_join(manual, cleaned, by = c("datetime", "Location"))
+
+# View filtered results
 joined %>%
   filter(Species == "Bilby" | Species == "Western Quoll") %>%
   View()
-#
-#
-#
-#
-#
-#
+```

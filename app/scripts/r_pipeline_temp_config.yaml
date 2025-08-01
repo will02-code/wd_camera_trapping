@@ -1,0 +1,5 @@
+ai_classification_csv: C:\Users\willo\OneDrive - UNSW\Documents\Work\CES\Wild Deserts\Image
+  classification\coding\app\config/config_2025-08-01.csv
+folders: E:/WD Camera traps/2025_07_WCAM_originals\outputs
+output_dir: C:\Users\willo\OneDrive - UNSW\Documents\Work\CES\Wild Deserts\Image classification\coding\app\final_outputs/
+parent_dir: E:/WD Camera traps/

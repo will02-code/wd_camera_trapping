@@ -8,7 +8,6 @@ format: html
 ```{r}
 library(exiftoolr)
 library(tidyverse)
-library(tidymodels)
 library(furrr)
 library(tictoc)
 library(fs)
@@ -36,10 +35,16 @@ my_theme <- function() {
 ```{r}
 
 correct_incorrect = str_extract(exif$Categories, "correct|incorrect")
-if (correct_incorrect == "incorrect"){
-    correct_species = str_extract(exif$Categories, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit")
-}else{
-    correct_species = str_extract(image_path, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit")
+if (correct_incorrect == "incorrect") {
+  correct_species = str_extract(
+    exif$Categories,
+    "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"
+  )
+} else {
+  correct_species = str_extract(
+    image_path,
+    "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"
+  )
 }
 
 # Very slow initial method
@@ -79,100 +84,165 @@ if (correct_incorrect == "incorrect"){
 # # data_list2 <- map(images, process_image)
 # toc()
 
-
 ```
 
 # Final
 
 ```{r}
 
-
 folders = c(
-  "E:/Wild deserts photos/2024_12_WCAM_originals/training/classification/night",
-  "E:/Wild deserts photos/2024_12_WCAM_originals/training/classification/day"
+  "E:/wd_camera_test/2025_01_WCAM_originals/outputs"
 )
 
-images = list.files(folders, full.names =TRUE, recursive = TRUE)
+images = list.files(
+  folders,
+  full.names = TRUE,
+  recursive = TRUE,
+  pattern = ".jpg|.JPG"
+)
 length(images)
 
 tic() #exiftoolr with only categories is very fast (~ 1 sec per 100 images)
-data_list <- exiftoolr::exif_read(images, tags = c("Categories"),quiet = FALSE)
+data_list <- exiftoolr::exif_read(images, tags = c("Categories"), quiet = FALSE)
 toc()
 #22 sec elapsed
 
-
-
-final_df <- data_list %>%  
+final_df <- data_list %>%
   mutate(
     Categories = str_remove_all(Categories, "Categor"),
     correct_incorrect = str_extract(Categories, "correct|incorrect"),
-    predicted_species = str_extract(SourceFile, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"),
-    correct_species = if_else(correct_incorrect == "incorrect", str_extract(Categories, "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"), predicted_species),
-    
-    confidence = if_else(str_detect(SourceFile, "low_confidence"), "low_confidence", "high_confidence"),
+    predicted_species = str_extract(
+      SourceFile,
+      "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"
+    ),
+    correct_species = case_when(
+      correct_incorrect == "incorrect" ~
+        str_extract(
+          Categories,
+          "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"
+        ),
+      correct_incorrect == "correct" & !str_detect(SourceFile, "discard") ~
+        predicted_species, # if correct, then predicted species is the correct species,
+      str_detect(SourceFile, "further_verification") ~
+        str_extract(
+          Categories,
+          "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit"
+        ),
+      str_detect(SourceFile, "discard") ~ "empty"
+    ),
+    discard = str_detect(SourceFile, "discard"),
+    confidence = if_else(
+      str_detect(SourceFile, "low_confidence"),
+      "low_confidence",
+      "high_confidence"
+    ),
     camera = str_extract(SourceFile, "[WP]CAM\\d{2}"),
-    datetime = str_extract(SourceFile, "\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}_\\d{2}") %>% ymd_hms(tz = "Australia/Sydney")
-  ) %>% 
-    # filter(correct_species != "non_target") %>% #need to deal with these somehow; comment out accordingly
-    mutate(
-    correct_species = as.factor(correct_species), 
-    predicted_species = as.factor(predicted_species))
+    datetime = str_extract(
+      SourceFile,
+      "\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}_\\d{2}"
+    ) %>%
+      ymd_hms(tz = "Australia/Sydney")
+  ) %>%
+  # filter(correct_species != "non_target") %>% #need to deal with these somehow; comment out accordingly
+  mutate(
+    correct_species = as.factor(correct_species),
+    predicted_species = as.factor(predicted_species)
+  )
 
-final_df %>% 
+final_df %>%
   write.csv("12_2024_val.csv")
-final_df <- read.csv("12_2024_val.csv") %>%  
-  # filter(correct_species != "non_target") %>% 
-  mutate(correct_species = as.factor(correct_species), predicted_species = as.factor(predicted_species)) 
+final_df <- read.csv("12_2024_val.csv") %>%
+  # filter(correct_species != "non_target") %>%
+  mutate(
+    correct_species = as.factor(correct_species),
+    predicted_species = as.factor(predicted_species)
+  )
 # Create the confusion matrix
-cm <- conf_mat(final_df %>% filter(confidence == "high_confidence"), truth = correct_species, estimate = predicted_species)
-autoplot(cm, type = "heatmap")+my_theme()
-
-final_df %>% filter(correct_species == "non_target", confidence == "high_confidence") %>% View()
+cm <- conf_mat(
+  final_df %>% filter(confidence == "high_confidence"),
+  truth = correct_species,
+  estimate = predicted_species
+)
+autoplot(cm, type = "heatmap") + my_theme()
 
 
 summary(cm)
 cm %>% tidy()
 
 final_df %>% filter(correct_species == "non_target") %>% View()
-final_df %>%  
-  filter(confidence == "high_confidence") %>% 
-  group_by(correct_species) %>% 
-  mutate(total_true = n()) %>% 
-  group_by(correct_species,predicted_species) %>% 
-  summarize(intersection = n(), total_true = first(total_true)) %>% 
-  mutate(proportion_of_true = intersection / total_true) %>% 
-  select(-c(intersection, total_true)) %>% 
-  arrange(predicted_species) %>% 
-  pivot_wider(names_from = predicted_species, values_from = proportion_of_true, values_fill = 0) %>% 
+final_df %>%
+  filter(confidence == "high_confidence") %>%
+  group_by(correct_species) %>%
+  mutate(total_true = n()) %>%
+  group_by(correct_species, predicted_species) %>%
+  summarize(intersection = n(), total_true = first(total_true)) %>%
+  mutate(proportion_of_true = intersection / total_true) %>%
+  select(-c(intersection, total_true)) %>%
+  arrange(predicted_species) %>%
+  pivot_wider(
+    names_from = predicted_species,
+    values_from = proportion_of_true,
+    values_fill = 0
+  ) %>%
   arrange(correct_species)
 
 
- with_intersection <- final_df %>%  
-  filter(confidence == "high_confidence", str_detect(camera, "WCAM"), !is.na(correct_species)) %>% 
+with_intersection <- final_df %>%
+  filter(
+    confidence == "high_confidence",
+    str_detect(camera, "WCAM"),
+    !is.na(correct_species)
+  ) %>%
   group_by(correct_species) %>% # change for total prop
-  mutate(total_true = n()) %>% 
-  group_by(correct_species,predicted_species) %>% 
-  summarize(intersection = n(), total_true = first(total_true)) %>% 
-  mutate(proportion_of_true = intersection / total_true) 
+  mutate(total_true = n()) %>%
+  group_by(correct_species, predicted_species) %>%
+  summarize(intersection = n(), total_true = first(total_true)) %>%
+  mutate(proportion_of_true = intersection / total_true)
 
-with_intersection %>% 
-  select(-c(total_true, intersection)) %>% 
-  pivot_wider(names_from = predicted_species, values_from = proportion_of_true, values_fill = 0) %>% 
-  pivot_longer(cols = -c(correct_species), names_to = "predicted_species", values_to = "proportion_of_true") %>% 
-  left_join(with_intersection, join_by(predicted_species == predicted_species, correct_species == correct_species, proportion_of_true == proportion_of_true)) %>% 
-  replace(is.na(.), 0) %>% 
-  mutate(correct_species = fct_relevel(correct_species, "Rabbit", "Quoll", "Kangaroo", "Fox", "Dingo", "Cat", "blobs", "Bilby", "non_target")) %>% 
-  ggplot(aes(x = predicted_species, y = correct_species, ))+
-  geom_tile(aes(alpha = proportion_of_true),fill = "purple")+ 
-  geom_text(aes(label = round(intersection, 3)), size = 10)+ # or intersection
-  my_theme()+
+with_intersection %>%
+  select(-c(total_true, intersection)) %>%
+  pivot_wider(
+    names_from = predicted_species,
+    values_from = proportion_of_true,
+    values_fill = 0
+  ) %>%
+  pivot_longer(
+    cols = -c(correct_species),
+    names_to = "predicted_species",
+    values_to = "proportion_of_true"
+  ) %>%
+  left_join(
+    with_intersection,
+    join_by(
+      predicted_species == predicted_species,
+      correct_species == correct_species,
+      proportion_of_true == proportion_of_true
+    )
+  ) %>%
+  replace(is.na(.), 0) %>%
+  mutate(
+    correct_species = fct_relevel(
+      correct_species,
+      "Rabbit",
+      "Quoll",
+      "Kangaroo",
+      "Fox",
+      "Dingo",
+      "Cat",
+      "blobs",
+      "Bilby",
+      "non_target"
+    )
+  ) %>%
+  ggplot(aes(x = predicted_species, y = correct_species, )) +
+  geom_tile(aes(alpha = proportion_of_true), fill = "purple") +
+  geom_text(aes(label = round(intersection, 3)), size = 10) + # or intersection
+  my_theme() +
   theme(
     panel.grid.major = element_blank(),
     axis.text.x = element_text(angle = 45, hjust = 1)
-    )+
-      labs(x = "Predicted", y = "Actual",alpha = "Proportion of True")
-
-
+  ) +
+  labs(x = "Predicted", y = "Actual", alpha = "Proportion of True")
 
 
 ```
@@ -186,31 +256,32 @@ with_intersection %>%
 
 # Exportng the images with incorrect bounding boxes in the detection model 
 ```{r}
-E:/Wild deserts photos/2025_04_WCAM_originals/training/detection/classification/day/images/WCAM03_2025_05_05_15_03_55.JPG
 
+detection_training_dir <- "E:/wd_camera_test/2025_01_WCAM_originals/training/detection_training"
 
-E:/Wild deserts photos/2025_04_WCAM_originals/training/classification/day/Kangaroo/WCAM03_2025_05_05_15_03_55_Kangaroo_0.JPG
-
-
-detection_training_dir <- "E:/Wild deserts photos/2025_04_WCAM_originals/training/detection_training" 
-
-incorrect_bounding <- final_df %>% 
-  filter(correct_incorrect == "incorrect", correct_species == "non_target") %>% 
+incorrect_bounding <- final_df %>%
+  filter(correct_incorrect == "incorrect", correct_species == "non_target") %>%
   mutate(
     detection_image_path = SourceFile,
-    detection_label_path = detection_image_path %>% 
-      str_replace("images", "labels") %>% 
+    detection_label_path = detection_image_path %>%
+      str_replace("images", "labels") %>%
       str_replace(".jpg", ".txt"),
     night_day = ifelse(str_detect(SourceFile, "night"), "night", "day"),
-      destination_images = str_c(detection_training_dir,"/", night_day, "/images/", basename(detection_image_path)),
-      destination_labels = str_c(detection_training_dir, "/",night_day, "/labels/", basename(detection_label_path))
-      
-      ) 
-
-
-
-incorrect_bounding %>% glimpse()
-
+    destination_images = str_c(
+      detection_training_dir,
+      "/",
+      night_day,
+      "/images/",
+      basename(detection_image_path)
+    ),
+    destination_labels = str_c(
+      detection_training_dir,
+      "/",
+      night_day,
+      "/labels/",
+      basename(detection_label_path)
+    )
+  )
 
 label_detection_path_col <- 'detection_label_path'
 image_detection_path_col <- 'detection_image_path'
@@ -225,8 +296,16 @@ for (i in 1:nrow(incorrect_bounding)) {
   destination_image_path <- incorrect_bounding[[dest_images_col]][i]
 
   # Create destination directories if they don't exist
-  dir_create(dirname(destination_label_path), recurse = TRUE, showWarnings = FALSE)
-  dir_create(dirname(destination_image_path), recurse = TRUE, showWarnings = FALSE)
+  dir_create(
+    dirname(destination_label_path),
+    recurse = TRUE,
+    showWarnings = FALSE
+  )
+  dir_create(
+    dirname(destination_image_path),
+    recurse = TRUE,
+    showWarnings = FALSE
+  )
 
   # Copy label file
   # tryCatch({
@@ -237,51 +316,320 @@ for (i in 1:nrow(incorrect_bounding)) {
   # })
 
   # Copy image file
-  tryCatch({
-    file_copy(source_image_path, destination_image_path, overwrite = TRUE)
-    cat(paste0("Copied image: ", basename(source_image_path), " to ", destination_image_path, "\n"))
-  }, error = function(e) {
-    cat(paste0("Warning: Could not copy image from ", source_image_path, " - ", e$message, "\n"))
-  })
+  tryCatch(
+    {
+      file_copy(source_image_path, destination_image_path, overwrite = TRUE)
+      cat(paste0(
+        "Copied image: ",
+        basename(source_image_path),
+        " to ",
+        destination_image_path,
+        "\n"
+      ))
+    },
+    error = function(e) {
+      cat(paste0(
+        "Warning: Could not copy image from ",
+        source_image_path,
+        " - ",
+        e$message,
+        "\n"
+      ))
+    }
+  )
 }
 
+detection_training_dir <- "E:/wd_camera_test/2025_01_WCAM_originals/training/detection_training"
+
+# TODO: all images that are CORRECTLY cropped as well
+ai_classification_df <- read.csv(
+  "coding/july_2025_pipeline/config_2025-07-28.csv"
+)
+
+ai_classification_df$filename = basename(ai_classification_df$blank_path)
+ai_classification_df$datetime = ymd_hms(
+  ai_classification_df$time,
+  tz = "Australia/Sydney"
+)
 
 
+ai_classification_df$id = paste0(
+  ai_classification_df$camera,
+  "_",
+  ai_classification_df$datetime
+)
+
+final_df$id = paste0(final_df$camera, "_", final_df$datetime)
+
+parent_dir <- "E:/wd_camera_test/"
+remote_dir <- "/home/willwright/Documents/will_drive/wild_deserts_outputs/"
+classes = c(
+  "Kangaroo",
+  "Cat",
+  "Rabbit",
+  "Dingo",
+  "Fox",
+  "Bilby",
+  "Quoll",
+  "Unidentifiable",
+  'Bettong',
+  'Crest-tailed mulgara',
+  'Dusky hopping mouse',
+  'Golden bandicoot',
+  'Greater bilby',
+  'Western quoll'
+)
+
+convert_xyxy_to_yolo <- function(
+  bbox_string,
+  image_width = 2048,
+  image_height = 1440,
+  round_digits = 4
+) {
+  cleaned_string <- gsub("\\[|\\]", "", bbox_string)
+  coords_char <- strsplit(cleaned_string, ", ")[[1]]
+
+  # Convert to numeric
+  coords_numeric <- as.numeric(coords_char)
+
+  # Assign to xyxy variables
+  x_min <- coords_numeric[1]
+  y_min <- coords_numeric[2]
+  x_max <- coords_numeric[3]
+  y_max <- coords_numeric[4]
+  # Calculate absolute width and height of the box
+  box_width <- x_max - x_min
+  box_height <- y_max - y_min
+
+  # Calculate absolute center coordinates
+  x_center_abs <- x_min + (box_width / 2)
+  y_center_abs <- y_min + (box_height / 2)
+
+  # Normalize the coordinates and dimensions
+  x_center_norm <- x_center_abs / image_width
+  y_center_norm <- y_center_abs / image_height
+  width_norm <- box_width / image_width
+  height_norm <- box_height / image_height
+
+  # Return as a named numeric vector
+  return(paste(
+    round(x_center_norm, round_digits),
+    round(y_center_norm, round_digits),
+    round(width_norm, round_digits),
+    round(height_norm, round_digits)
+  ))
+}
+
+scale_md_centre <- function(
+  bbox_string,
+  width = 2048,
+  height = 1440,
+  round_digits = 3
+) {
+  cleaned_string <- gsub("\\[|\\]", "", bbox_string)
+  coords_char <- strsplit(cleaned_string, ", ")[[1]]
+
+  # Convert to numeric
+  coords_numeric <- as.numeric(coords_char)
+
+  # Assign to xyxy variables
+  x_min <- coords_numeric[1]
+  y_min <- coords_numeric[2]
+  w <- coords_numeric[3]
+  h <- coords_numeric[4]
+  # Calculate absolute width and height of the box
+  x_c <- x_min + w / 2
+  y_c <- y_min + h / 2
+  w <- w
+  h <- h
+  # Return as a named numeric vector
+  return(paste(
+    round(x_c, round_digits),
+    round(y_c, round_digits),
+    round(w, round_digits),
+    round(h, round_digits)
+  ))
+}
+
+all_labelled_detections <- left_join(
+  final_df,
+  ai_classification_df,
+  by = "id"
+) |>
+  filter(correct_species != "non_target") %>%
+  mutate(
+    blank_path = str_replace(blank_path, remote_dir, parent_dir),
+
+    detection_image_path = blank_path,
+
+    night_day = case_when(
+      str_detect(SourceFile, "night") ~ "night",
+      str_detect(SourceFile, "day") ~ "day",
+      model == "day" ~ "day",
+      model == "night" ~ "night"
+    ),
+    destination_images = str_c(
+      detection_training_dir,
+      "/",
+      night_day,
+      "/images/",
+      basename(detection_image_path)
+    ),
+    destination_labels = str_replace(destination_images, "images", "labels") %>%
+      str_replace(".JPG", ".txt"),
+    label = case_when(
+      correct_species == "empty" ~ NA_character_,
+      species == "animal" ~
+        paste0(
+          match(correct_species, classes) - 1,
+          " ",
+          map_chr(bbox, ~ scale_md_centre(.x))
+        ),
+      species != "animal" ~
+        paste0(
+          match(correct_species, classes) - 1,
+          " ",
+          map_chr(bbox, ~ convert_xyxy_to_yolo(.x))
+        )
+    ) |>
+      str_remove_all(",") |>
+      str_squish()
+  ) |>
+
+  filter(!is.na(label)) |>
+  group_by(id) |>
+  distinct() |>
+  reframe(
+    detection_image_path = first(detection_image_path),
+    destination_images = first(destination_images),
+    destination_labels = first(destination_labels),
+    label = str_c(unique(label), collapse = "\n")
+  )
+
+image_detection_path_col <- 'detection_image_path'
+dest_labels_col <- 'destination_labels'
+dest_images_col <- 'destination_images'
 
 
+for (i in 1:nrow(all_labelled_detections)) {
+  source_image_path <- all_labelled_detections[[image_detection_path_col]][i]
+  destination_label_path <- all_labelled_detections[[dest_labels_col]][i]
+  destination_image_path <- all_labelled_detections[[dest_images_col]][i]
+
+  # Create destination directories if they don't exist
+  dir_create(
+    dirname(destination_label_path),
+    recurse = TRUE,
+    showWarnings = FALSE
+  )
+  dir_create(
+    dirname(destination_image_path),
+    recurse = TRUE,
+    showWarnings = FALSE
+  )
+
+  # Copy label file
+  tryCatch(
+    {
+      writeLines(all_labelled_detections$label[i], destination_label_path)
+      cat(paste0(
+        "Created label file: ",
+        basename(destination_label_path),
+        "\n"
+      ))
+    },
+    error = function(e) {
+      cat(paste0(
+        "Warning: Could not create label file at ",
+        destination_label_path,
+        " - ",
+        e$message,
+        "\n"
+      ))
+    }
+  )
+
+  # Copy image file
+  tryCatch(
+    {
+      file_copy(source_image_path, destination_image_path, overwrite = TRUE)
+      cat(paste0(
+        "Copied image: ",
+        basename(source_image_path),
+        " to ",
+        destination_image_path,
+        "\n"
+      ))
+    },
+    error = function(e) {
+      cat(paste0(
+        "Warning: Could not copy image from ",
+        source_image_path,
+        " - ",
+        e$message,
+        "\n"
+      ))
+    }
+  )
+}
 
 
 ```
 
+
 # Same but for the image classification models
 ```{r}
 
-classification_training_dir <- "E:/Wild deserts photos/2025_04_WCAM_originals/training/classification_training" 
-incorrect_class <- final_df %>% 
-  filter(correct_incorrect == "incorrect", correct_species != "non_target") %>% 
+classification_training_dir <- "E:/wd_camera_test/2025_01_WCAM_originals/training/classification_training"
+incorrect_class <- final_df %>%
+  filter(correct_species != "non_target") %>%
   mutate(
     current_image_path = SourceFile,
-    detection_image_path = SourceFile %>% 
-      str_replace("training", "training/detection") %>% 
-      str_replace("/(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)", "/images") %>% 
-      str_remove("_(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)_\\d") %>% 
+    detection_image_path = SourceFile %>%
+      str_replace("training", "training/detection") %>%
+      str_replace(
+        "/(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)",
+        "/images"
+      ) %>%
+      str_remove(
+        "_(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)_\\d"
+      ) %>%
       str_remove("low_confidence/"),
-    detection_label_path = detection_image_path %>% 
-      str_replace("images", "labels") %>% 
+    detection_label_path = detection_image_path %>%
+      str_replace("images", "labels") %>%
       str_replace(".jpg", ".txt"),
     night_day = ifelse(str_detect(SourceFile, "night"), "night", "day"),
-      destination_images = str_c(detection_training_dir,"/", night_day, "/images/", basename(detection_image_path)),
-      destination_labels = str_c(detection_training_dir, "/",night_day, "/labels/", basename(detection_label_path)),
-      
-      
+    destination_images = str_c(
+      detection_training_dir,
+      "/",
+      night_day,
+      "/images/",
+      basename(detection_image_path)
+    ),
+    destination_labels = str_c(
+      detection_training_dir,
+      "/",
+      night_day,
+      "/labels/",
+      basename(detection_label_path)
+    ),
+
     night_day = ifelse(str_detect(current_image_path, "night"), "night", "day"),
-    destination_images = str_c(classification_training_dir,"/", night_day, "/",correct_species, "/", basename(current_image_path))
-      
-      ) 
+    destination_images = str_c(
+      classification_training_dir,
+      "/",
+      night_day,
+      "/",
+      correct_species,
+      "/",
+      correct_incorrect,
+      "_",
+      basename(current_image_path)
+    )
+  )
 
 image_detection_path_col <- 'current_image_path'
 dest_images_col <- 'destination_images'
-
 
 
 for (i in 1:nrow(incorrect_class)) {
@@ -289,123 +637,137 @@ for (i in 1:nrow(incorrect_class)) {
   destination_image_path <- incorrect_class[[dest_images_col]][i]
 
   # Create destination directories if they don't exist
-  dir_create(dirname(destination_image_path), recurse = TRUE, showWarnings = FALSE)
+  dir_create(
+    dirname(destination_image_path),
+    recurse = TRUE,
+    showWarnings = FALSE
+  )
 
   # Copy image file
-  tryCatch({
-    file_copy(source_image_path, destination_image_path, overwrite = TRUE)
-    cat(paste0("Copied image: ", basename(source_image_path), " to ", destination_image_path, "\n"))
-  }, error = function(e) {
-    cat(paste0("Warning: Could not copy image from ", source_image_path, " - ", e$message, "\n"))
-  })
+  tryCatch(
+    {
+      file_copy(source_image_path, destination_image_path, overwrite = TRUE)
+      cat(paste0(
+        "Copied image: ",
+        basename(source_image_path),
+        " to ",
+        destination_image_path,
+        "\n"
+      ))
+    },
+    error = function(e) {
+      cat(paste0(
+        "Warning: Could not copy image from ",
+        source_image_path,
+        " - ",
+        e$message,
+        "\n"
+      ))
+    }
+  )
 }
+## Just ignore this; it is species specific but I think we should do that post-creation
+# detection_training_dir <- "E:/Wild deserts photos/model_training/bilbies_quolls"
 
-detection_training_dir <- "E:/Wild deserts photos/model_training/bilbies_quolls" 
+# bilbies <- final_df %>%
+#   filter( correct_species == "Bilby") %>%
+#   mutate(
+#     current_image_path = SourceFile,
+#     detection_image_path = SourceFile %>%
+#       str_replace("training", "training/detection") %>%
+#       str_replace("/(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)", "/images") %>%
+#       str_remove("_(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)_\\d") %>%
+#       str_remove("low_confidence/"),
+#     detection_label_path = detection_image_path %>%
+#       str_replace("images", "labels") %>%
+#       str_replace(".jpg", ".txt"),
+#     night_day = ifelse(str_detect(SourceFile, "night"), "night", "day"),
+#       destination_images = str_c(detection_training_dir,"/", night_day, "/images/", basename(detection_image_path)),
+#       destination_labels = str_c(detection_training_dir, "/",night_day, "/labels/", basename(detection_label_path)),
 
-bilbies <- final_df %>% 
-  filter( correct_species == "Bilby") %>% 
-  mutate(
-    current_image_path = SourceFile,
-    detection_image_path = SourceFile %>% 
-      str_replace("training", "training/detection") %>% 
-      str_replace("/(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)", "/images") %>% 
-      str_remove("_(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)_\\d") %>% 
-      str_remove("low_confidence/"),
-    detection_label_path = detection_image_path %>% 
-      str_replace("images", "labels") %>% 
-      str_replace(".jpg", ".txt"),
-    night_day = ifelse(str_detect(SourceFile, "night"), "night", "day"),
-      destination_images = str_c(detection_training_dir,"/", night_day, "/images/", basename(detection_image_path)),
-      destination_labels = str_c(detection_training_dir, "/",night_day, "/labels/", basename(detection_label_path)),
-    
-      
-      ) 
-label_detection_path_col <- 'detection_label_path'
-image_detection_path_col <- 'detection_image_path'
-dest_labels_col <- 'destination_labels'
-dest_images_col <- 'destination_images'
+#       )
+# label_detection_path_col <- 'detection_label_path'
+# image_detection_path_col <- 'detection_image_path'
+# dest_labels_col <- 'destination_labels'
+# dest_images_col <- 'destination_images'
 
-# Iterate through each row of the dataframe
-for (i in 1:nrow(bilbies)) {
-  source_label_path <- bilbies[[label_detection_path_col]][i]
-  source_image_path <- bilbies[[image_detection_path_col]][i]
-  destination_label_path <- bilbies[[dest_labels_col]][i]
-  destination_image_path <- bilbies[[dest_images_col]][i]
+# # Iterate through each row of the dataframe
+# for (i in 1:nrow(bilbies)) {
+#   source_label_path <- bilbies[[label_detection_path_col]][i]
+#   source_image_path <- bilbies[[image_detection_path_col]][i]
+#   destination_label_path <- bilbies[[dest_labels_col]][i]
+#   destination_image_path <- bilbies[[dest_images_col]][i]
 
-  # Create destination directories if they don't exist
-  dir_create(dirname(destination_label_path), recurse = TRUE, showWarnings = FALSE)
-  dir_create(dirname(destination_image_path), recurse = TRUE, showWarnings = FALSE)
+#   # Create destination directories if they don't exist
+#   dir_create(dirname(destination_label_path), recurse = TRUE, showWarnings = FALSE)
+#   dir_create(dirname(destination_image_path), recurse = TRUE, showWarnings = FALSE)
 
-  # Copy label file
-  tryCatch({
-    file_copy(source_label_path, destination_label_path, overwrite = TRUE)
-    cat(paste0("Copied label: ", basename(source_label_path), " to ", destination_label_path, "\n"))
-  }, error = function(e) {
-    cat(paste0("Warning: Could not copy label from ", source_label_path, " - ", e$message, "\n"))
-  })
+#   # Copy label file
+#   tryCatch({
+#     file_copy(source_label_path, destination_label_path, overwrite = TRUE)
+#     cat(paste0("Copied label: ", basename(source_label_path), " to ", destination_label_path, "\n"))
+#   }, error = function(e) {
+#     cat(paste0("Warning: Could not copy label from ", source_label_path, " - ", e$message, "\n"))
+#   })
 
-  # Copy image file
-  tryCatch({
-    file_copy(source_image_path, destination_image_path, overwrite = TRUE)
-    cat(paste0("Copied image: ", basename(source_image_path), " to ", destination_image_path, "\n"))
-  }, error = function(e) {
-    cat(paste0("Warning: Could not copy image from ", source_image_path, " - ", e$message, "\n"))
-  })
-}
+#   # Copy image file
+#   tryCatch({
+#     file_copy(source_image_path, destination_image_path, overwrite = TRUE)
+#     cat(paste0("Copied image: ", basename(source_image_path), " to ", destination_image_path, "\n"))
+#   }, error = function(e) {
+#     cat(paste0("Warning: Could not copy image from ", source_image_path, " - ", e$message, "\n"))
+#   })
+# }
 
+# quolls <- final_df %>%
+#   filter( correct_species == "Quoll") %>%
+#   mutate(
+#     current_image_path = SourceFile,
+#     detection_image_path = SourceFile %>%
+#       str_replace("training", "training/detection") %>%
+#       str_replace("/(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)", "/images") %>%
+#       str_remove("_(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)_\\d") %>%
+#       str_remove("low_confidence/"),
+#     detection_label_path = detection_image_path %>%
+#       str_replace("images", "labels") %>%
+#       str_replace(".jpg", ".txt"),
+#     night_day = ifelse(str_detect(SourceFile, "night"), "night", "day"),
+#       destination_images = str_c(detection_training_dir,"/", night_day, "/images/", basename(detection_image_path)),
+#       destination_labels = str_c(detection_training_dir, "/",night_day, "/labels/", basename(detection_label_path)),
 
+#       )
+# label_detection_path_col <- 'detection_label_path'
+# image_detection_path_col <- 'detection_image_path'
+# dest_labels_col <- 'destination_labels'
+# dest_images_col <- 'destination_images'
 
-quolls <- final_df %>% 
-  filter( correct_species == "Quoll") %>% 
-  mutate(
-    current_image_path = SourceFile,
-    detection_image_path = SourceFile %>% 
-      str_replace("training", "training/detection") %>% 
-      str_replace("/(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)", "/images") %>% 
-      str_remove("_(Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit)_\\d") %>% 
-      str_remove("low_confidence/"),
-    detection_label_path = detection_image_path %>% 
-      str_replace("images", "labels") %>% 
-      str_replace(".jpg", ".txt"),
-    night_day = ifelse(str_detect(SourceFile, "night"), "night", "day"),
-      destination_images = str_c(detection_training_dir,"/", night_day, "/images/", basename(detection_image_path)),
-      destination_labels = str_c(detection_training_dir, "/",night_day, "/labels/", basename(detection_label_path)),
-    
-      
-      ) 
-label_detection_path_col <- 'detection_label_path'
-image_detection_path_col <- 'detection_image_path'
-dest_labels_col <- 'destination_labels'
-dest_images_col <- 'destination_images'
+# # Iterate through each row of the dataframe
+# for (i in 1:nrow(quolls)) {
+#   source_label_path <- quolls[[label_detection_path_col]][i]
+#   source_image_path <- quolls[[image_detection_path_col]][i]
+#   destination_label_path <- quolls[[dest_labels_col]][i]
+#   destination_image_path <- quolls[[dest_images_col]][i]
 
-# Iterate through each row of the dataframe
-for (i in 1:nrow(quolls)) {
-  source_label_path <- quolls[[label_detection_path_col]][i]
-  source_image_path <- quolls[[image_detection_path_col]][i]
-  destination_label_path <- quolls[[dest_labels_col]][i]
-  destination_image_path <- quolls[[dest_images_col]][i]
+#   # Create destination directories if they don't exist
+#   dir_create(dirname(destination_label_path), recurse = TRUE, showWarnings = FALSE)
+#   dir_create(dirname(destination_image_path), recurse = TRUE, showWarnings = FALSE)
 
-  # Create destination directories if they don't exist
-  dir_create(dirname(destination_label_path), recurse = TRUE, showWarnings = FALSE)
-  dir_create(dirname(destination_image_path), recurse = TRUE, showWarnings = FALSE)
+#   # Copy label file
+#   tryCatch({
+#     file_copy(source_label_path, destination_label_path, overwrite = TRUE)
+#     cat(paste0("Copied label: ", basename(source_label_path), " to ", destination_label_path, "\n"))
+#   }, error = function(e) {
+#     cat(paste0("Warning: Could not copy label from ", source_label_path, " - ", e$message, "\n"))
+#   })
 
-  # Copy label file
-  tryCatch({
-    file_copy(source_label_path, destination_label_path, overwrite = TRUE)
-    cat(paste0("Copied label: ", basename(source_label_path), " to ", destination_label_path, "\n"))
-  }, error = function(e) {
-    cat(paste0("Warning: Could not copy label from ", source_label_path, " - ", e$message, "\n"))
-  })
-
-  # Copy image file
-  tryCatch({
-    file_copy(source_image_path, destination_image_path, overwrite = TRUE)
-    cat(paste0("Copied image: ", basename(source_image_path), " to ", destination_image_path, "\n"))
-  }, error = function(e) {
-    cat(paste0("Warning: Could not copy image from ", source_image_path, " - ", e$message, "\n"))
-  })
-}
-
+#   # Copy image file
+#   tryCatch({
+#     file_copy(source_image_path, destination_image_path, overwrite = TRUE)
+#     cat(paste0("Copied image: ", basename(source_image_path), " to ", destination_image_path, "\n"))
+#   }, error = function(e) {
+#     cat(paste0("Warning: Could not copy image from ", source_image_path, " - ", e$message, "\n"))
+#   })
+# }
 
 ```
 
@@ -414,15 +776,20 @@ for (i in 1:nrow(quolls)) {
 
 ```{r}
 
-output_digivol <- read.csv("E:/Wild deserts photos/2025_04_WCAM_originals/digivol_output_WCAM15.csv") %>% 
-  filter(species=="animal") %>% 
-  mutate(datetime_v2 = ymd_hms(time, tz = "Australia/Sydney"),
-  start_datetime = datetime_v2 - 10,
-  end_datetime = datetime_v2 + 10)
+output_digivol <- read.csv(
+  "E:/Wild deserts photos/2025_04_WCAM_originals/digivol_output_WCAM15.csv"
+) %>%
+  filter(species == "animal") %>%
+  mutate(
+    datetime_v2 = ymd_hms(time, tz = "Australia/Sydney"),
+    start_datetime = datetime_v2 - 10,
+    end_datetime = datetime_v2 + 10
+  )
 
 
-
-output_all <- read.csv("E:/Wild deserts photos/2025_04_WCAM_originals/output_WCAM15.csv")
+output_all <- read.csv(
+  "E:/Wild deserts photos/2025_04_WCAM_originals/output_WCAM15.csv"
+)
 here::here()
 ```
 
@@ -432,33 +799,47 @@ here::here()
 
 
 ```{r}
-all_species <- c("Kangaroo", "Cat", "Unidentifiable", "Rabbit", "Fox", "Quoll", "Bilby") 
+all_species <- c(
+  "Kangaroo",
+  "Cat",
+  "Unidentifiable",
+  "Rabbit",
+  "Fox",
+  "Quoll",
+  "Bilby"
+)
 
 manual_classification <- read.csv(here::here("concatenated.csv"))
 manual_cleaned <- manual_classification %>%
-    mutate(
-      datetime = dmy_hms(paste(Date, Time)),
-      Date = dmy(Date),
-      manual_count = 1
-    ) %>% 
-    mutate(Species = case_when(
+  mutate(
+    datetime = dmy_hms(paste(Date, Time)),
+    Date = dmy(Date),
+    manual_count = 1
+  ) %>%
+  mutate(
+    Species = case_when(
       Species == "Red Kangaroo" ~ "Kangaroo",
       Species == "Euro" ~ "Kangaroo",
       Species == "Western Quoll" ~ "Quoll",
       .default = Species
-    )) %>% 
-    
-    # Ensure we only consider species the AI can detect
-    
-    group_by(Species, Date) %>%
-    summarise(count = sum(manual_count), .groups = "drop") %>% 
-    # Ensure all species/dates are present
-    ungroup() %>%
-    tidyr::complete(Species = all_species, Date = seq(min(Date), max(Date), by = "day"), fill = list(count = 0)) %>%
-    filter(Species %in% all_species) %>%
-    group_by(Species) %>%
-    arrange(Date) %>%
-    mutate(cumulative_count = cumsum(count), method = "manual")
+    )
+  ) %>%
+
+  # Ensure we only consider species the AI can detect
+
+  group_by(Species, Date) %>%
+  summarise(count = sum(manual_count), .groups = "drop") %>%
+  # Ensure all species/dates are present
+  ungroup() %>%
+  tidyr::complete(
+    Species = all_species,
+    Date = seq(min(Date), max(Date), by = "day"),
+    fill = list(count = 0)
+  ) %>%
+  filter(Species %in% all_species) %>%
+  group_by(Species) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = cumsum(count), method = "manual")
 manual_cleaned %>%
   ggplot(aes(x = Date, y = cumulative_count)) +
   geom_line(aes(colour = Species)) +
@@ -468,41 +849,40 @@ manual_cleaned %>%
 ```
 
 ```{r}
-ai_classification <- read.csv("E:/Wild deserts photos/2024_12_WCAM_originals/output_WCAM13.csv") 
-  
+ai_classification <- read.csv(
+  "E:/Wild deserts photos/2024_12_WCAM_originals/output_WCAM13.csv"
+)
 
-final_df %>% 
+
+final_df %>%
   mutate(datetime = ymd_hms(datetime, tz = "Australia/Sydney")) %>%
   filter(correct_species != "non_target") %>%
   mutate()
-  group_by(camera) %>% 
-    mutate(
-    filename = str_extract(SourceFile, "WCAM\\d{2}_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}_\\d{2}"),
-    group10min=cut(datetime, "10 min")
-    ) %>% 
-      group_by(filename, correct_species) %>% 
-      summarise(
-        count = n(),
-        time = first(group10min), 
+group_by(camera) %>%
+  mutate(
+    filename = str_extract(
+      SourceFile,
+      "WCAM\\d{2}_\\d{4}_\\d{2}_\\d{2}_\\d{2}_\\d{2}_\\d{2}"
+    ),
+    group10min = cut(datetime, "10 min")
+  ) %>%
+  group_by(filename, correct_species) %>%
+  summarise(
+    count = n(),
+    time = first(group10min),
+  ) %>%
+  group_by(time, correct_species) %>%
+  summarise(count = max(count), .groups = "drop") %>%
 
-
-      ) %>% 
-        group_by(time, correct_species) %>%
-        summarise(count = max(count), .groups = "drop") %>%
-        
-
-
-
-
-    mutate(Date = ymd_hms(time) %>% as.Date(), Species = correct_species) %>%
-      group_by(Date, Species) %>% 
-      summarise(count = sum(count), .groups = "drop") %>%
-    group_by(Species) %>%
-    arrange(Date) %>%
-    mutate(cumulative_count = (cumsum(count)), method = "ai") %>% 
-    bind_rows(manual_cleaned) %>%
-    filter(Species != "Kangaroo") %>% 
-    ggplot(aes(x = Date, y = cumulative_count)) +
+  mutate(Date = ymd_hms(time) %>% as.Date(), Species = correct_species) %>%
+  group_by(Date, Species) %>%
+  summarise(count = sum(count), .groups = "drop") %>%
+  group_by(Species) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = (cumsum(count)), method = "ai") %>%
+  bind_rows(manual_cleaned) %>%
+  filter(Species != "Kangaroo") %>%
+  ggplot(aes(x = Date, y = cumulative_count)) +
   geom_line(aes(colour = Species)) +
   geom_point(aes(colour = Species)) +
   facet_wrap(~method) +
@@ -516,7 +896,169 @@ final_df %>%
 
 ```{r}
 
+digivol_input <- read.csv(
+  "E:/Wild deserts photos/Exclosures/digivol_output_NSCAM14.csv"
+) %>%
+  mutate(
+    blank_path = str_replace(blank_path, "L:", "E:"),
+    annotated_path = str_replace(annotated_path, "L:", "E:")
+  )
+images_2024_09 <- digivol_input %>%
+  filter(species == "animal", camera != "NSCAM11") %>%
+  mutate(
+    output_dir = "E:/Wild deserts photos/Exclosures/2024 09/output/digivol/to_upload",
+    month = str_extract(blank_path, "\\d{4} \\d{2}"),
+    filename = str_extract(
+      blank_path,
+      "NSCAM\\d{2}_\\d{2}_\\d{2}_\\d{4}_\\d{2}_\\d{2}_\\d{2}"
+    ),
+    outfile = paste0(output_dir, "/", filename, ".jpg")
+  ) %>%
+  filter(
+    month == "2024 09",
+    str_detect(camera, "NSCAM12|NSCAM13|NSCAM14|NSCAM15")
+  )
 
 
+src_images_col <- 'blank_path'
+
+dest_images_col <- 'outfile'
+
+# Iterate through each row of the dataframe
+for (i in 1:nrow(images_2024_09)) {
+  source_image_path <- images_2024_09[[src_images_col]][i]
+  destination_image_path <- images_2024_09[[dest_images_col]][i]
+
+  # Create destination directories if they don't exist
+  dir_create(
+    dirname(destination_image_path),
+    recurse = TRUE,
+    showWarnings = FALSE
+  )
+
+  # Copy image file
+  tryCatch(
+    {
+      file_copy(source_image_path, destination_image_path, overwrite = TRUE)
+      cat(paste0(
+        "Copied image: ",
+        basename(source_image_path),
+        " to ",
+        destination_image_path,
+        "\n"
+      ))
+    },
+    error = function(e) {
+      cat(paste0(
+        "Warning: Could not copy image from ",
+        source_image_path,
+        " - ",
+        e$message,
+        "\n"
+      ))
+    }
+  )
+}
+
+images_2024_10 <- digivol_input %>%
+  filter(species == "animal", camera != "NSCAM11") %>%
+  mutate(
+    output_dir = "E:/Wild deserts photos/Exclosures/2024 10/output/digivol/to_upload",
+    month = str_extract(blank_path, "\\d{4} \\d{2}"),
+    filename = str_extract(
+      blank_path,
+      "NSCAM\\d{2}_\\d{2}_\\d{2}_\\d{4}_\\d{2}_\\d{2}_\\d{2}"
+    ),
+    outfile = paste0(output_dir, "/", filename, ".jpg")
+  ) %>%
+  filter(month == "2024 10")
+
+
+src_images_col <- 'blank_path'
+
+dest_images_col <- 'outfile'
+
+# Iterate through each row of the dataframe
+for (i in 1:nrow(images_2024_10)) {
+  source_image_path <- images_2024_10[[src_images_col]][i]
+  destination_image_path <- images_2024_10[[dest_images_col]][i]
+
+  # Create destination directories if they don't exist
+  dir_create(
+    dirname(destination_image_path),
+    recurse = TRUE,
+    showWarnings = FALSE
+  )
+
+  # Copy image file
+  tryCatch(
+    {
+      file_copy(source_image_path, destination_image_path, overwrite = TRUE)
+    },
+    error = function(e) {
+      cat(paste0(
+        "Warning: Could not copy image from ",
+        source_image_path,
+        " - ",
+        e$message,
+        "\n"
+      ))
+    }
+  )
+}
+
+images_2025_02 <- digivol_input %>%
+  filter(species == "animal", camera != "NSCAM11") %>%
+  mutate(
+    output_dir = "E:/Wild deserts photos/Exclosures/2025 02/output/digivol/to_upload",
+    month = str_extract(blank_path, "\\d{4} \\d{2}"),
+    filename = str_extract(
+      blank_path,
+      "NSCAM\\d{2}_\\d{2}_\\d{2}_\\d{4}_\\d{2}_\\d{2}_\\d{2}"
+    ),
+    outfile = paste0(output_dir, "/", filename, ".jpg")
+  ) %>%
+  filter(month == "2025 02")
+
+
+src_images_col <- 'blank_path'
+
+dest_images_col <- 'outfile'
+
+# Iterate through each row of the dataframe
+for (i in 1:nrow(images_2025_02)) {
+  source_image_path <- images_2025_02[[src_images_col]][i]
+  destination_image_path <- images_2025_02[[dest_images_col]][i]
+
+  # Create destination directories if they don't exist
+  dir_create(
+    dirname(destination_image_path),
+    recurse = TRUE,
+    showWarnings = FALSE
+  )
+
+  # Copy image file
+  tryCatch(
+    {
+      file_copy(source_image_path, destination_image_path, overwrite = TRUE)
+      cat(paste0(
+        "Copied image: ",
+        basename(source_image_path),
+        " to ",
+        destination_image_path,
+        "\n"
+      ))
+    },
+    error = function(e) {
+      cat(paste0(
+        "Warning: Could not copy image from ",
+        source_image_path,
+        " - ",
+        e$message,
+        "\n"
+      ))
+    }
+  )
+}
 
 ```

@@ -1,0 +1,133 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Wyzecam Analysis
+```{r}
+library(tidyverse)
+
+```
+
+```{r}
+files <- list.files(
+  "../Camera Traps/",
+  full.names = TRUE,
+  recursive = TRUE,
+  include.dirs = FALSE,
+  pattern = ".mp4"
+)
+
+d = str_extract(files, "\\d{8}") |> dmy()
+t = str_extract(files, "_\\d{4}") |> str_remove("_")
+event_type = str_extract(files, "_[A-z]+\\.") |>
+  str_remove_all("[_|\\.]")
+camera = str_extract(files, "W.*\\d/") |>
+  str_remove_all("/") |>
+  str_remove("jan_25") |>
+  str_remove("jan_24")
+
+df <- tibble(
+  file = files,
+  date = d,
+  time = t,
+  event_type = event_type,
+  camera = camera
+)
+df |>
+  group_by(camera) |>
+  mutate(
+    first_date = min(date),
+    last_date = max(date),
+    number_events = n(),
+    weeks_deployed = difftime(max(date), min(date), units = "weeks") |>
+      as.double(),
+    events_per_week = number_events / weeks_deployed |> round(2),
+    event_type = str_replace(event_type, "person", "motion") |>
+      str_replace("car", "vehicle") |>
+      str_replace("kanagroo", "kangaroo")
+  ) |>
+  group_by(camera, event_type) |>
+  mutate(
+    type_number_of_events = n(),
+    percent_of_total = type_number_of_events / number_events * 100
+  ) |>
+  select(
+    camera,
+    first_date,
+    last_date,
+    number_events,
+    weeks_deployed,
+    events_per_week,
+    event_type,
+    type_number_of_events,
+    percent_of_total
+  ) |>
+  distinct() |>
+
+  group_by(
+    camera,
+    first_date,
+    last_date,
+    number_events,
+    weeks_deployed,
+    events_per_week
+  ) |>
+  arrange(desc(percent_of_total)) |>
+  summarise(
+    # Create the "Objects (% of events)" column:
+    # 1. Paste event_type and percent_of_total for each row within the group
+    # 2. Round percent_of_total to 1 decimal place for display
+    # 3. Use str_c(collapse = ", ") to combine all event type strings into one cell
+    `Objects (% of events)` = paste0(
+      str_to_sentence(event_type),
+      " (",
+      round(percent_of_total, 1),
+      "%)"
+    ) |>
+      str_c(collapse = ", "),
+    .groups = 'drop' # Important: this removes the grouping, leaving a clean dataframe
+  ) |>
+  ungroup() |> # Explicitly ungroup to ensure all subsequent operations are on the full dataframe
+  mutate(
+    # Format the "Operating period" column as "Month Year-Month Year"
+    `Operating period` = paste0(
+      format(first_date, "%b %Y"),
+      "-",
+      format(last_date, "%b %Y")
+    ),
+    # Format the "Events captured (No per week)" column
+    # Use number_events and events_per_week (rounded to 1 decimal place)
+    `Events captured (No per week)` = paste0(
+      number_events,
+      " (",
+      round(events_per_week, 1),
+      ")"
+    ),
+    # Add a placeholder for the "Challenges" column, as it's not derived from your current data
+    `Challenges` = ""
+  ) |>
+  # Select and rename columns to match your desired output table headings
+  select(
+    `Camera No` = camera,
+    `Operating period`,
+    `Events captured (No per week)`,
+    `Objects (% of events)`,
+    `Challenges`
+  ) |>
+  write.csv("wyzecam_analysis.csv", row.names = FALSE)
+
+```
+
+
+
+

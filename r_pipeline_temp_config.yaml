@@ -1,0 +1,4 @@
+ai_classification_csv: july_2025_pipeline_v2/config\config_2025-07-31.csv
+folders: E:/WD Camera traps/2025_07_WCAM_originals\outputs
+output_dir: july_2025_pipeline_v2/final_outputs
+parent_dir: E:/WD Camera traps/
