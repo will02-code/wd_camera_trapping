@@ -81,8 +81,9 @@ def run_remote_command(command):
         ssh_client.connect(
             hostname=REMOTE_HOST.split("@")[1], username=REMOTE_HOST.split("@")[0]
         )
-        stdin, stdout, stderr = ssh_client.exec_command(command)
-        print(stdout.read().decode())
+        stdin, stdout, stderr = ssh_client.exec_command(command, get_pty=True)
+        for line in iter(stdout.readline, ""):
+            print(line, end="")
         error_output = stderr.read().decode()
         if error_output:
             print(f"--- Remote Error Output: ---\n{error_output}")
@@ -141,7 +142,7 @@ def main_pipeline():
             "sync",
             full_local_image_path,
             f"{ONEDRIVE_REMOTE_DATA_PATH}/{local_image_folder_name}",
-            "--progress",
+            "-vv",
         ]
     )
 
@@ -153,7 +154,7 @@ def main_pipeline():
 
     source ~/miniconda3/bin/activate ai_training
     cd Documents
-    rclone sync {ONEDRIVE_REMOTE_PATH} {REMOTE_OUTPUTS_PATH}
+    rclone copy {ONEDRIVE_REMOTE_DATA_PATH}/{local_image_folder_name} {REMOTE_OUTPUTS_PATH}/{CONFIG["cloud"]["raw_data_cloud_path"]}/{local_image_folder_name} -vv
     python -c "import yaml; data = yaml.safe_load(open('{REMOTE_SCRIPTS_PATH}config.yaml')); data['paths']['target_dirs'] = ['{local_image_folder_name}']; yaml.safe_dump(data, open('{REMOTE_SCRIPTS_PATH}config.yaml', 'w'))"
     python {REMOTE_SCRIPTS_PATH}classification.py
     CLASSIF_CONFIG_FILE=$(ls -t wild_deserts_outputs/config/config_*.csv | head -1)
@@ -161,7 +162,7 @@ def main_pipeline():
         echo "Error: Classification config file not found on remote machine."
         exit 1
     fi
-    rclone copy "$CLASSIF_CONFIG_FILE" {ONEDRIVE_REMOTE_CONFIG_PATH}
+    rclone copy "$CLASSIF_CONFIG_FILE" {ONEDRIVE_REMOTE_CONFIG_PATH} -vv
 
     """
     run_remote_command(remote_classification_script)
@@ -235,7 +236,7 @@ def main_pipeline():
         print(f"Error writing R config file: {e}")
         raise Exception("Failed to write R config.")
 
-    outputs = subprocess.run(
+    subprocess.run(
         [
             RSCRIPT_PATH,
             os.path.join(LOCAL_PIPELINE_SCRIPTS_PATH, "generate_training_images.R"),
@@ -299,8 +300,8 @@ def main_pipeline():
     echo "Using remote validated config: $VALIDATED_CONFIG_FILE"
 
     python {REMOTE_SCRIPTS_PATH}generate_training_images.py -vc "$VALIDATED_CONFIG_FILE"
-
-    rclone copy ./{REMOTE_OUTPUTS_PATH}/ {ONEDRIVE_REMOTE_PATH}  # Syncs remote wild_deserts_outputs to Onedrive
+    
+    rclone copy ./{REMOTE_OUTPUTS_PATH}/{CONFIG["cloud"]["raw_data_cloud_path"]}/{local_image_folder_name} {ONEDRIVE_REMOTE_DATA_PATH}/{local_image_folder_name} -vv # Syncs remote wild_deserts_outputs to Onedrive
     echo "Rclone sync completed."
 
     """

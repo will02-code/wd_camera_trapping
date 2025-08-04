@@ -71,29 +71,50 @@ def rename_images_by_exif_and_subdir(root_dir):
     # Walk through the directory tree
     for dirpath, dirnames, filenames in os.walk(root_path):
         current_dir_path = Path(dirpath)
+        print(current_dir_path)
+        # Check if the current directory follows either pattern:
+        # 1. WCAMxx/100RECNX
+        # 2. WCAMxx/DCIM/100RECNX
+        # We need to find the "WCAMxx" part, which could be either the parent
+        # or grandparent of the 100RECNX directory.
 
-        # Check if the current directory is at the level of WCAMxx/100RECNX
-        # We need to find the "WCAMxx" part, which is the direct parent of 100RECNX
-        # and has "2025_01_WCAM_originals" as its grandparent.
+        # Check if current directory name matches the RECNX pattern (e.g., '100RECNX', '101RECNX')
+        if any(part in current_dir_path.name for part in ["RECNX"]):
+            # Try to find WCAM in parent or grandparent
+            wcam_dir = None
 
-        # Heuristic: Check if the current directory name is '100RECNX', '101RECNX', etc.
-        # And its parent is a 'WCAMxx' directory.
-        if current_dir_path.name.find("RECNX"):
-            print(current_dir_path)
-            wcam_dir = current_dir_path.parent.name  # e.g., WCAM01, WCAM13
-            # Extract the two digits from WCAMxx
-            try:
-                wcam_digits = wcam_dir[-2:]  # Assuming WCAMxx
-                if not wcam_digits.isdigit():
-                    print(
-                        f"Skipping {current_dir_path}: Could not extract WCAM digits from '{wcam_dir}'"
-                    )
-                    continue
-            except IndexError:
+            # Check parent first
+            if "WCAM" in current_dir_path.parent.name:
+                wcam_dir = current_dir_path.parent.name
+            # If not in parent, check grandparent
+            elif (
+                current_dir_path.parent.parent
+                and "WCAM" in current_dir_path.parent.parent.name
+            ):
+                wcam_dir = current_dir_path.parent.parent.name
+
+            if not wcam_dir:
                 print(
-                    f"Skipping {current_dir_path}: WCAM directory name '{wcam_dir}' is too short."
+                    f"Skipping {current_dir_path}: Could not find WCAM directory in parent or grandparent"
                 )
                 continue
+            wcam_digits = wcam_dir[-2:]
+            # if current_dir_path.name.find("RECNX"):
+            #     wcam_dir = current_dir_path.parent.name  # e.g., WCAM01, WCAM13
+            #     # Extract the two digits from WCAMxx
+            #     print(wcam_dir)
+            #     try:
+            #           # Assuming WCAMxx
+            #         if not wcam_digits.isdigit():
+            #             print(
+            #                 f"Skipping {current_dir_path}: Could not extract WCAM digits from '{wcam_dir}'"
+            #             )
+            #             continue
+            #     except IndexError:
+            #         print(
+            #             f"Skipping {current_dir_path}: WCAM directory name '{wcam_dir}' is too short."
+            #         )
+            #         continue
 
             print(f"Processing images in: {current_dir_path} (WCAM: {wcam_digits})")
 

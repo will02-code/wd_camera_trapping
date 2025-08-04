@@ -5,7 +5,6 @@
 suppressPackageStartupMessages({
   library(tidyverse)
   library(exiftoolr)
-  library(tictoc)
   library(fs)
   library(glue)
   library(here)
@@ -20,8 +19,8 @@ CONFIG <- list(
   folders = NULL, # Will be set by argument
   detection_training_dir = "wild_deserts_outputs/training/detection_training",
   classification_training_dir = "wild_deserts_outputs/training/classification_training",
-  ai_classification_csv = NULL, # Will be set by argument
-  parent_dir = NULL, # Will be set by argument
+  ai_classification_csv = "C:/Users/willo/OneDrive - UNSW/Documents/Work/CES/Wild Deserts/Image classification/coding/app/config/config_2025-08-04.csv", # Will be set by argument
+  parent_dir = "E:/WD Camera traps/", # Will be set by argument
   remote_dir = "/home/willwright/Documents/wild_deserts_outputs/raw_data/", # This seems fixed, or could be an arg too
   image_width = 2048,
   image_height = 1440,
@@ -107,11 +106,10 @@ plan(multisession, workers = availableCores() - 1)
 extract_image_metadata <- function(images, tags = "Categories") {
   cat(glue("Processing {length(images)} images...\n"))
 
-  tic()
   tryCatch(
     {
       metadata <- exiftoolr::exif_read(images, tags = tags, quiet = FALSE)
-      toc()
+
       return(metadata)
     },
     error = function(e) {
@@ -136,6 +134,8 @@ process_metadata <- function(data_list) {
         str_detect(SourceFile, "further_verification") ~
           str_extract(Categories, CONFIG$species_regex),
         str_detect(SourceFile, "discard") ~ "empty",
+        is.na(correct_incorrect) & str_detect(Categories, predicted_species) ~
+          predicted_species,
         .default = NA_character_
       ),
       discard = str_detect(SourceFile, "discard"),
@@ -354,50 +354,37 @@ write_yolo_labels <- function(df) {
 #' @param df Dataframe with camera trap data. Needs headers SourceFile, correct_species, camera, datetime.
 
 get_activity_statistics <- function(df) {
-  group_id <- 1
   cleaned <- df |>
     select(SourceFile, correct_species, camera, datetime) |>
     filter(correct_species != "non_target", correct_species != "empty") |>
     arrange(datetime) |>
     mutate(time_block = NA_integer_)
-  start_time <- cleaned$datetime[1]
-  cleaned$time_block[1] <- group_id
   cameras <- unique(cleaned$camera)
   cleaned_by_camera <- tibble()
   # I loop through each camera; you may not need to do this depending on how your data is structured
   for (cam in cameras) {
-    # print(cam)
-    # Filter the data for the current camera and sort by datetime
     temp <- cleaned %>%
-      arrange(camera) %>%
       filter(camera == cam) %>%
-      arrange(datetime)
-    # Loop through each row in the filtered data. All I do in this loop is assign a time_block to each row; one every 10 minutes for each camera. Look at the resulting df for this to make sense. But it's basically so I can process by 10 minute windows
-    for (i in 2:nrow(temp)) {
-      # set the threshold
+      arrange(datetime) %>%
+      mutate(time_block = as.numeric(cut(datetime, breaks = "10 min")))
 
-      # If current datetime is more than 10 minutes after the start_time,
-      # increment the group counter and update the start_time
-      if (
-        difftime(temp$datetime[i], start_time, units = "secs") >
-          CONFIG$threshold
-      ) {
-        group_id <- group_id + 1
-        start_time <- temp$datetime[i]
-      }
-
-      # Assign the current group_id
-      temp$time_block[i] <- group_id
-    }
     cleaned_by_camera <- bind_rows(cleaned_by_camera, temp)
   }
 
-  cleaned_by_camera |>
-    group_by(camera, datetime, correct_species) |>
-    mutate(n = n()) |>
-    arrange(camera, datetime) |>
-    group_by(camera, time_block, correct_species) |>
-    summarise(count = max(n), datetime = first(datetime)) |>
+  cleaned_by_camera %>%
+    group_by(camera, datetime, correct_species) %>%
+    mutate(n = n()) %>%
+    arrange(camera, datetime) %>%
+    group_by(camera, time_block) |>
+    mutate(
+      id = cur_group_id()
+    ) |>
+    group_by(camera, id, correct_species) %>%
+    summarise(
+      count = max(n),
+      datetime = first(datetime),
+      .groups = 'drop'
+    ) |>
     write.csv(paste0(CONFIG$output_dir, "/", CONFIG$output_csv_name))
 }
 

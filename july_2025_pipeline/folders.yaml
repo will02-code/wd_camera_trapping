@@ -1,6 +1,0 @@
-output_folders:
-  output_folder: "outputs"
-  classification_subfolder: "classification"
-  further_classification_subfolder: "further_verification"
-  discard_subfolder: "discard"
-  annotated_subfolder: "yolo_format"
