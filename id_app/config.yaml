@@ -1,0 +1,45 @@
+# config.yaml
+# General settings
+project_name: "WildDesertsCameraTraps"
+timezone: "Australia/Sydney"
+r_species_classes: # This can be shared with the R script
+  - "Kangaroo"
+  - "Cat"
+  - "Rabbit"
+  - "Dingo"
+  - "Fox"
+  - "Bilby"
+  - "Quoll"
+  - "Unidentifiable"
+  - "Bettong"
+  - "Crest-tailed mulgara"
+  - "Dusky hopping mouse"
+  - "Golden bandicoot"
+  - "Greater bilby"
+  - "Western quoll"
+
+# Local machine paths
+local:
+  base_images_path: "E:/WD Camera traps/" # Where original camera trap image folders are
+  scripts_folder: "scripts/" # Where all local pipeline scripts reside (relative to main script OR absolute)
+  rclone_path: "C:/rclone/rclone.exe" # Path to rclone executable
+  rscript_path: "C:/Program Files/R/R-4.4.2/bin/Rscript.exe" # Path to Rscript executable
+  final_outputs_path: "final_outputs/" # Subfolder for final results within scripts_base_path (or absolute)
+  digikam_warning_message: "*** IMPORTANT: Please verify images using DigiKam software. Press Enter when done to continue... ***"
+  config_folder: "config/" # Folder for configuration files (relative to scripts_folder or absolute)
+
+# Remote machine settings (SSH, Conda, Remote Paths)
+remote:
+  host: "willwright@e26lv5-rtxa6000.duckdns.org"
+  scripts_base_path: "./AI_identification/" # Absolute path to remote scripts
+  outputs_base_path: "./wild_deserts_outputs/" # Absolute path to remote outputs
+  conda_init_script: "/home/willwright/miniconda3" # Path to conda init script
+  conda_env_name: "ai_training" # Name of the conda environment to activate
+
+# Cloud/Rclone settings
+cloud:
+  rclone_remote_name: "will_onedrive" # Name of the rclone remote
+  base_cloud_path: "wd_cameratraps" # Base path within the cloud remote
+  config_cloud_path: "config" # Subfolder for config files
+  raw_data_cloud_path: "raw_data" # Subfolder for raw image data
+  final_outputs_cloud_path: "final_outputs" # Subfolder for final outputs

@@ -24,7 +24,7 @@ files <- list.files(
   full.names = TRUE,
   recursive = TRUE,
   include.dirs = FALSE,
-  pattern = ".mp4"
+  pattern = ".mp4|.png"
 )
 
 d = str_extract(files, "\\d{8}") |> dmy()
@@ -43,90 +43,149 @@ df <- tibble(
   event_type = event_type,
   camera = camera
 )
-df |>
+
+# Full date range across all cameras
+global_min_date <- min(df$date, na.rm = TRUE)
+global_max_date <- max(df$date, na.rm = TRUE)
+full_date_seq <- seq(global_min_date, global_max_date, by = "day")
+
+# Dates each camera was active
+active_dates <- df |>
+  filter(!is.na(camera), !is.na(date)) |>
+  distinct(camera, date) |>
+  mutate(was_active = TRUE)
+
+# Generate full date frame per camera
+camera_full_dates <- expand_grid(
+  camera = unique(active_dates$camera),
+  date = full_date_seq
+)
+
+# Join with actual data to find missing days
+inactive_days <- camera_full_dates |>
+  left_join(active_dates, by = c("camera", "date")) |>
+  filter(is.na(was_active)) # only days not matched
+
+
+# Group missing days into contiguous gaps
+inactive_periods <- inactive_days |>
+  arrange(camera, date) |>
   group_by(camera) |>
   mutate(
-    first_date = min(date),
-    last_date = max(date),
-    number_events = n(),
-    weeks_deployed = difftime(max(date), min(date), units = "weeks") |>
-      as.double(),
-    events_per_week = number_events / weeks_deployed |> round(2),
-    event_type = str_replace(event_type, "person", "motion") |>
-      str_replace("car", "vehicle") |>
-      str_replace("kanagroo", "kangaroo")
+    gap_group = cumsum(date != lag(date) + days(1) | is.na(lag(date)))
   ) |>
-  group_by(camera, event_type) |>
-  mutate(
-    type_number_of_events = n(),
-    percent_of_total = type_number_of_events / number_events * 100
-  ) |>
-  select(
-    camera,
-    first_date,
-    last_date,
-    number_events,
-    weeks_deployed,
-    events_per_week,
-    event_type,
-    type_number_of_events,
-    percent_of_total
-  ) |>
-  distinct() |>
-
-  group_by(
-    camera,
-    first_date,
-    last_date,
-    number_events,
-    weeks_deployed,
-    events_per_week
-  ) |>
-  arrange(desc(percent_of_total)) |>
+  group_by(camera, gap_group) |>
   summarise(
-    # Create the "Objects (% of events)" column:
-    # 1. Paste event_type and percent_of_total for each row within the group
-    # 2. Round percent_of_total to 1 decimal place for display
-    # 3. Use str_c(collapse = ", ") to combine all event type strings into one cell
-    `Objects (% of events)` = paste0(
-      str_to_sentence(event_type),
-      " (",
-      round(percent_of_total, 1),
-      "%)"
-    ) |>
-      str_c(collapse = ", "),
-    .groups = 'drop' # Important: this removes the grouping, leaving a clean dataframe
+    inactive_from = min(date),
+    inactive_to = max(date),
+    days_inactive = as.integer(inactive_to - inactive_from) + 1,
+    .groups = "drop"
   ) |>
-  ungroup() |> # Explicitly ungroup to ensure all subsequent operations are on the full dataframe
+  filter(days_inactive > 5) |>
+  group_by(camera) |>
+  summarise(
+    `Inactive period` = paste0(
+      format(inactive_from, "%b %d"),
+      " - ",
+      format(inactive_to, "%b %d")
+    )
+  ) |>
+  group_by(camera) |>
+  summarise(
+    `Inactive periods` = str_c(`Inactive period`, collapse = ", ")
+  )
+
+
+df |>
+  group_by(camera) |>
+  # Calculate weekly statistics
+  mutate(week = floor_date(date, "week")) |>
+  group_by(camera, week) |>
+  summarise(
+    weekly_events = n(),
+    .groups = "drop"
+  ) |>
+  group_by(camera) |>
+  summarise(
+    first_date = min(week),
+    last_date = max(week),
+    total_events = sum(weekly_events),
+    weeks_with_data = n(),
+    mean_events_per_week = mean(weekly_events),
+    sd_events_per_week = sd(weekly_events),
+    .groups = "drop"
+  ) |>
+  # Back to your original structure with the new SD column
+  left_join(
+    df |>
+      mutate(
+        event_type = str_to_sentence(str_replace_all(
+          event_type,
+          c("person" = "motion", "car" = "vehicle", "kanagroo" = "kangaroo")
+        )) |>
+          str_trim()
+      ) |>
+      group_by(camera, event_type) |>
+      summarise(type_events = n(), .groups = "drop") |>
+      group_by(camera) |>
+      mutate(
+        total_camera_events = sum(type_events),
+        percent_of_total = type_events / total_camera_events * 100,
+      ) |>
+      arrange(camera, desc(percent_of_total)) |>
+      summarise(
+        `Objects (% of events)` = paste0(
+          event_type,
+          " (",
+          round(percent_of_total, 1),
+          "%)"
+        ) |>
+          str_c(collapse = ", "),
+        .groups = "drop"
+      ),
+    by = "camera"
+  ) |>
   mutate(
-    # Format the "Operating period" column as "Month Year-Month Year"
     `Operating period` = paste0(
       format(first_date, "%b %Y"),
       "-",
       format(last_date, "%b %Y")
     ),
-    # Format the "Events captured (No per week)" column
-    # Use number_events and events_per_week (rounded to 1 decimal place)
-    `Events captured (No per week)` = paste0(
-      number_events,
+    `Events captured (Mean±SD per week)` = paste0(
+      total_events,
       " (",
-      round(events_per_week, 1),
-      ")"
-    ),
-    # Add a placeholder for the "Challenges" column, as it's not derived from your current data
-    `Challenges` = ""
+      round(mean_events_per_week, 1),
+      "±",
+      round(sd_events_per_week, 1),
+      ") "
+    )
   ) |>
-  # Select and rename columns to match your desired output table headings
+  left_join(inactive_periods, by = c("camera" = "camera")) |>
   select(
     `Camera No` = camera,
-    `Operating period`,
-    `Events captured (No per week)`,
+    `Events captured (Mean±SD per week)`,
+
     `Objects (% of events)`,
-    `Challenges`
+    `Inactive periods`
   ) |>
+
   write.csv("wyzecam_analysis.csv", row.names = FALSE)
 
 ```
+
+
+
+
+
+```{r}
+
+```
+
+
+
+
+
+
 
 
 
