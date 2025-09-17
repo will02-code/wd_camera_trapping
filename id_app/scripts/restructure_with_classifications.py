@@ -115,9 +115,13 @@ if __name__ == "__main__":
         if x != "none" and x != "animal" and x != "vehicle" and x != "person"
     ]
 
-    remote_path = re.split(
-        r"20\d{2}_\d{2}_[WP]CAM_originals", config_df["blank_path"].iloc[0]
-    )[0]
+    remote_path = os.path.join(
+        re.split(
+            os.path.basename(target_dir),
+            config_df["blank_path"].iloc[0],
+        )[0],
+        os.path.basename(target_dir),
+    )
     print(remote_path)
     for line in config_df.iterrows():
         # print(line[0])
@@ -127,7 +131,7 @@ if __name__ == "__main__":
 
         # print(new_blank_path)
         image = cv2.imread(new_blank_path)
-
+        print(f"Processing image: {new_blank_path}")
         annotated_path = line[1]["annotated_path"]
         # print("annotated:", annotated_path)
         if annotated_path != "none":
@@ -189,3 +193,19 @@ if __name__ == "__main__":
             os.makedirs(cropped_dir, exist_ok=True)
 
             cv2.imwrite(new_cropped_path, cropped_img)
+
+            full_size_class_path = re.sub(
+                "/classification/", "/full_size_classification/", new_cropped_path
+            )
+            full_size_class_dir = os.path.dirname(full_size_class_path)
+
+            os.makedirs(full_size_class_dir, exist_ok=True)
+            full_size_class_image = Image.fromarray(image)
+            full_size_class_image = draw_bounding_box_on_image(
+                full_size_class_image,
+                coords_list,
+                color="red",
+                thickness=4,
+                use_normalized_coordinates=False,
+            )
+            full_size_class_image.save(full_size_class_path)

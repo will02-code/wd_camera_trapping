@@ -198,7 +198,7 @@ def main_pipeline():
             "-c",
             full_ai_local_config_filepath,
             "-d",
-            LOCAL_ORIGINAL_IMAGES_BASE_PATH,
+            os.path.join(LOCAL_ORIGINAL_IMAGES_BASE_PATH, local_image_folder_name),
         ],
         capture_output=True,
     )
@@ -236,7 +236,7 @@ def main_pipeline():
         print(f"Error writing R config file: {e}")
         raise Exception("Failed to write R config.")
 
-    subprocess.run(
+    output = subprocess.run(
         [
             RSCRIPT_PATH,
             os.path.join(LOCAL_PIPELINE_SCRIPTS_PATH, "generate_training_images.R"),
@@ -244,6 +244,7 @@ def main_pipeline():
         ],
         capture_output=True,
     )  # Pass the path to the config file
+
     latest_validated_config_file = get_latest_dated_file(
         FINAL_OUTPUTS_PATH,
         "validated_config",

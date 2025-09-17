@@ -20,7 +20,7 @@ r_species_classes: # This can be shared with the R script
 
 # Local machine paths
 local:
-  base_images_path: "E:/WD Camera traps/" # Where original camera trap image folders are
+  base_images_path: "C:/Users/willo/OneDrive - UNSW/Documents/Work/CES/Wild Deserts/Image classification" # Where original camera trap image folders are
   scripts_folder: "scripts/" # Where all local pipeline scripts reside (relative to main script OR absolute)
   rclone_path: "C:/rclone/rclone.exe" # Path to rclone executable
   rscript_path: "C:/Program Files/R/R-4.4.2/bin/Rscript.exe" # Path to Rscript executable

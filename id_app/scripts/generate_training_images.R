@@ -8,8 +8,9 @@ suppressPackageStartupMessages({
   library(fs)
   library(glue)
   library(here)
-  library(furrr)
   library(yaml)
+  library(DBI)
+  library(hms)
 })
 
 # Configuration
@@ -26,25 +27,27 @@ CONFIG <- list(
   image_height = 1440,
   timezone = "Australia/Sydney", # This might be constant, or an arg
   species_classes = c(
-    "Kangaroo",
+    "All macropods",
     "Cat",
     "Rabbit",
     "Dingo",
     "Fox",
     "Bilby",
-    "Quoll",
+    "Western quoll",
     "Unidentifiable",
     "Bettong",
     "Crest-tailed mulgara",
-    "Dusky hopping mouse",
+    "hopping_mouse",
     "Golden bandicoot",
-    "Greater bilby",
-    "Western quoll"
+    "Emu",
+    "Pig",
+    "Goat",
   ),
-  species_regex = "Bilby|blobs|Cat|Dingo|Fox|Kangaroo|Quoll|non_target|Rabbit",
-  threshold_for_timeblocks = 600, # Default threshold of 10 minutes (600 seconds)
+  species_regex = "All macropods|Cat|Rabbit|Dingo|Fox|Bilby|Quoll|Unidentifiable|Bettong|Crest-tailed mulgara|Dusky hopping mouse|Golden bandicoot|Western quoll|non_target|blobs|Red Kangaroo|Goat|Emu|Pig",
+
   output_dir = NULL, # This will be set dynamically
-  output_csv_name = paste0("processed_camera_trap_data", Sys.Date(), ".csv") # Use Sys.Date() for current date
+  output_csv_name = paste0("processed_camera_trap_data", Sys.Date(), ".csv"), # Use Sys.Date() for current date
+  db = "C:/Users/willo/OneDrive - UNSW/Documents/Work/CES/Wild Deserts/Image classification/Camera Trapping Database_Beyond the Fence_Wild Deserts.accdb"
 )
 
 
@@ -68,6 +71,10 @@ if (length(args) > 0 && !is.na(args[1])) {
   }
 } else {
   message("No external config file specified. Using default CONFIG.")
+  external_config <- yaml::read_yaml(
+    "coding/id_app/scripts/r_pipeline_temp_config.yaml"
+  )
+  CONFIG <- modifyList(CONFIG, external_config)
 }
 
 # Ensure critical CONFIG values are present after loading/defaults
@@ -155,7 +162,8 @@ process_metadata <- function(data_list) {
     mutate(
       correct_species = factor(correct_species),
       predicted_species = factor(predicted_species)
-    )
+    ) |>
+    filter(!is.na(correct_species))
 }
 
 #' Convert bounding box coordinates from xyxy to YOLO format
@@ -352,8 +360,8 @@ write_yolo_labels <- function(df) {
 #' Get activity statitsics for a given dataframe. Generally after verification, though there is scope to
 #' only use AI data. WIP.
 #' @param df Dataframe with camera trap data. Needs headers SourceFile, correct_species, camera, datetime.
-
-get_activity_statistics <- function(df) {
+#' @param append_to_access Whether to append results to Access database
+get_activity_statistics <- function(df, append_to_access) {
   cleaned <- df |>
     select(SourceFile, correct_species, camera, datetime) |>
     filter(correct_species != "non_target", correct_species != "empty") |>
@@ -371,7 +379,8 @@ get_activity_statistics <- function(df) {
     cleaned_by_camera <- bind_rows(cleaned_by_camera, temp)
   }
 
-  cleaned_by_camera %>%
+  basic_cleaning <- cleaned_by_camera %>%
+    distinct() %>%
     group_by(camera, datetime, correct_species) %>%
     mutate(n = n()) %>%
     arrange(camera, datetime) %>%
@@ -379,13 +388,104 @@ get_activity_statistics <- function(df) {
     mutate(
       id = cur_group_id()
     ) |>
+    left_join(
+      df |> select(detection_image_path, camera, datetime),
+      by = c("camera", "datetime")
+    ) |>
+    distinct() |>
     group_by(camera, id, correct_species) %>%
+
     summarise(
       count = max(n),
+      detection_image_path = first(detection_image_path) |>
+        str_replace(CONFIG$remote_dir, CONFIG$parent_dir),
+      image_name = basename(detection_image_path),
       datetime = first(datetime),
       .groups = 'drop'
+    )
+  cleaned_formatted_for_access <- extract_image_metadata(
+    basic_cleaning$detection_image_path,
+    tags = c(
+      "Categories",
+      "MoonPhase",
+      "AmbientTemperature"
+    )
+  ) |>
+    right_join(
+      basic_cleaning,
+      by = c("SourceFile" = "detection_image_path")
     ) |>
-    write.csv(paste0(CONFIG$output_dir, "/", CONFIG$output_csv_name))
+    mutate(
+      `Moon Phase` = case_when(
+        MoonPhase == 0 ~ "New",
+        MoonPhase == 1 ~ "New Crescent",
+        MoonPhase == 2 ~ "First Quarter",
+        MoonPhase == 3 ~ "Waxing Gibbous",
+        MoonPhase == 4 ~ "Full",
+        MoonPhase == 5 ~ "Waning Gibbous",
+        MoonPhase == 6 ~ "Last Quarter",
+        MoonPhase == 7 ~ "Old Crescent",
+        .default = NA_character_
+      ),
+      Temp = AmbientTemperature,
+      Species = correct_species,
+      Number = count,
+      Site = camera,
+      Date = datetime |> as_date(),
+      Time = datetime |> as_hms(),
+      Comments = "test2",
+      `Pouch status` = ""
+    ) |>
+    select(
+      `Image Name` = image_name,
+      Site,
+      Date,
+      Time,
+      `Moon Phase`,
+      Temp,
+      Comments,
+      Number,
+      `Pouch status`,
+      Species
+    ) |>
+    mutate(
+      # TEXT columns
+      `Image Name` = as.character(`Image Name`),
+      Site = as.character(Site),
+      Species = as.character(Species),
+      `Moon Phase` = as.character(`Moon Phase`),
+      Temp = as.character(Temp), # IMPORTANT: Access Temp is TEXT (type 12)
+
+      # INTEGERS
+      Number = as.integer(Number),
+
+      # DATES / TIMES
+      Date = as.Date(Date),
+
+      # Access stores time as Date/Time. Use time-only base date 1899-12-30
+      Time = as.POSIXct(
+        paste("1899-12-30", format(Time, "%H:%M:%S")),
+        tz = "UTC"
+      )
+    )
+  if (append_to_access == TRUE) {
+    con <- dbConnect(
+      odbc::odbc(),
+      .connection_string = paste0(
+        "Driver={Microsoft Access Driver (*.mdb, *.accdb)};",
+        "DBQ=",
+        CONFIG$db,
+        ";"
+      )
+    )
+    options(odbc.batch_rows = 1)
+    dbAppendTable(con, "Camera Trapping Data", cleaned_formatted_for_access)
+  }
+
+  write.csv(
+    cleaned_formatted_for_access,
+    paste0(CONFIG$output_dir, "/", CONFIG$output_csv_name)
+  )
 }
 
 # Main Processing Functions
@@ -409,8 +509,11 @@ process_camera_trap_data <- function() {
   cat(glue("Found {length(images)} images\n"))
 
   # Extract metadata
-  exifr::configure_exiftool()
-  raw_metadata <- extract_image_metadata(images, tags = "Categories")
+  # exifr::configure_exiftool()
+  raw_metadata <- extract_image_metadata(
+    images,
+    tags = "Categories"
+  )
 
   # Process metadata and output activity data
   final_df <- process_metadata(raw_metadata)
@@ -424,6 +527,8 @@ process_camera_trap_data <- function() {
   classification <- process_classification_training(final_df)
 
   cat("\n✅ Pipeline completed successfully!\n")
+
+  # return the final df too because it has the paths to the images and labels
   return(list(full_join(detection, classification, by = "id"), final_df))
 }
 
@@ -492,7 +597,8 @@ process_detection_training <- function(final_df) {
       detection_image_path,
       destination_images,
       destination_labels,
-      label
+      label,
+      filename
     )
 
   # if (nrow(incorrect_bounding) > 0) {
@@ -550,7 +656,9 @@ process_detection_training <- function(final_df) {
       detection_image_path = first(detection_image_path),
       destination_images = first(destination_images),
       destination_labels = first(destination_labels),
+
       label = str_c(unique(label), collapse = "\n"),
+
       .groups = "drop"
     ) |>
     select(
@@ -591,7 +699,11 @@ process_classification_training <- function(final_df) {
         SourceFile,
         CONFIG$parent_dir,
         CONFIG$remote_dir
-      ),
+      ) |>
+        str_replace(
+          "full_size_classification",
+          "classification"
+        ),
       night_day = case_when(
         str_detect(cropped_image, "night") ~ "night",
         str_detect(cropped_image, "day") ~ "day",
@@ -646,7 +758,11 @@ write.csv(
   row.names = FALSE
 )
 cat(glue("Validated config written to: {validated_config_filename}\n"))
-get_activity_statistics(final_results[[2]])
+# Final results are a list with two elements. The first has the file paths/labels. The second has the processed metadata.
+get_activity_statistics(
+  full_join(file_paths, final_results[[2]]),
+  append_to_access = FALSE
+)
 cat(glue("Activity statistics written to: {CONFIG$output_csv_name}\n"))
 
 cat("R script finished.\n")
